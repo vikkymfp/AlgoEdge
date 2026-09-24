@@ -1,0 +1,115 @@
+// AlgoEdge — F&O signal strategy() backtest version
+// Spec reference: production-hardening §33 ("create a proper Pine
+// strategy() version separately from the production indicator").
+//
+// This is a SEPARATE file from the original production indicator this
+// project's fno_signals package was translated from — it is not meant to
+// run live or generate alerts. Paste it into TradingView's Pine Editor and
+// use the built-in Strategy Tester to backtest with TradingView's own
+// realistic commission/slippage modelling.
+//
+// Parameters below were taken directly from this repo's already-verified
+// Python translation (src/fno_signals/config.py's SignalConfig/RiskConfig/
+// SessionConfig defaults), not re-derived from memory, so this stays in
+// sync with what AlgoEdge actually runs live.
+//
+// IMPORTANT LIMITATION (same one documented in algoedge/backtest.py):
+// NIFTY/BANK NIFTY/SENSEX are index charts with no directly tradable
+// instrument — this strategy() trades the underlying's own price as a
+// proxy for buying a CALL (long) or PUT (short) option, exactly matching
+// this project's Python backtest engine. Results are underlying POINTS,
+// not a real option premium P&L — option Greeks (delta, theta decay, IV
+// changes) are not modelled by either backtest. Treat this as a diagnostic
+// of entry/exit timing quality, never as validated real-money option
+// profitability. Past performance never guarantees future results.
+
+//@version=6
+strategy(
+     "AlgoEdge F&O Backtest (EMA/RSI/Supertrend)",
+     shorttitle = "AlgoEdge-BT",
+     overlay = true,
+     default_qty_type = strategy.fixed,
+     default_qty_value = 1,
+     // Realistic execution assumptions (spec §33) - override these to match
+     // your own actual Groww brokerage/STT/exchange-charge rates; left at
+     // conservative non-zero defaults rather than 0, since "no cost" is
+     // never realistic for a backtest.
+     commission_type = strategy.commission.percent,
+     commission_value = 0.05,
+     slippage = 2,
+     calc_on_every_tick = false,
+     process_orders_on_close = true)
+
+// ---------------- Signal inputs (defaults match config.py's SignalConfig) ----------------
+emaFastLen  = input.int(9,  "EMA fast length",  group = "Signal")
+emaSlowLen  = input.int(21, "EMA slow length",  group = "Signal")
+rsiLen      = input.int(14, "RSI length",       group = "Signal")
+rsiBull     = input.float(55.0, "RSI bull threshold", group = "Signal")
+rsiBear     = input.float(45.0, "RSI bear threshold", group = "Signal")
+stLen       = input.int(10, "Supertrend ATR length", group = "Signal")
+stMult      = input.float(3.0, "Supertrend multiplier", group = "Signal")
+useVwap     = input.bool(false, "Require VWAP confirmation", group = "Signal",
+     tooltip = "Off by default, matching this project's Python defaults: an index chart with no real traded volume makes VWAP meaningless. Turn on only when charting an instrument with real volume (e.g. the futures contract).")
+
+// ---------------- Risk inputs (defaults match config.py's RiskConfig) ----------------
+atrLen        = input.int(14, "ATR length (SL/target)", group = "Risk")
+slMult        = input.float(1.5, "Stop-loss ATR multiplier", group = "Risk")
+tpMult        = input.float(4.5, "Target ATR multiplier", group = "Risk", tooltip = "4.5/1.5 keeps the project's default 1:3 risk/reward")
+minSlPoints   = input.float(0.0, "Minimum SL distance (points, 0 = off)", group = "Risk")
+
+// ---------------- Session inputs (defaults match config.py's SessionConfig) ----------------
+sessionStart = input.session("0915-1540", "Entry session (IST)", group = "Session",
+     tooltip = "Entries only inside this window. Open positions are NEVER force-closed at session end - they carry over exactly like the live delivery/carry-forward strategy this mirrors, exiting only on their own SL/target.")
+inSession = not na(time(timeframe.period, sessionStart, "Asia/Kolkata"))
+
+// ---------------- Indicators (Pine's own built-ins - the ground truth this project's Python code was matched against) ----------------
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+rsiValue = ta.rsi(close, rsiLen)
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+atrValue = ta.atr(atrLen)
+vwapValue = ta.vwap(hlc3)
+
+vwapOkBull = useVwap ? close > vwapValue : true
+vwapOkBear = useVwap ? close < vwapValue : true
+
+bullSetup = emaFast > emaSlow and rsiValue > rsiBull and stDir < 0 and vwapOkBull
+bearSetup = emaFast < emaSlow and rsiValue < rsiBear and stDir > 0 and vwapOkBear
+
+// Only a genuine setup TRANSITION triggers an entry (matches the Python
+// engine's `call_signal = bull_setup and not bull_setup[1]`) - "still
+// true" on a later bar must never re-fire the same entry.
+callSignal = bullSetup and not bullSetup[1] and inSession and strategy.position_size == 0
+putSignal  = bearSetup and not bearSetup[1] and inSession and strategy.position_size == 0
+
+slDist = math.max(atrValue * slMult, minSlPoints)
+tpDist = slDist * (tpMult / slMult)
+
+// ---------------- Entries / exits ----------------
+// "long" here means "buy a CALL"; "short" means "buy a PUT" - see the
+// limitation note at the top of this file. strategy.exit's own stop/limit
+// handles the SL/target exactly once per entry, matching the Python
+// engine's single-open-position state machine (Pine's strategy() already
+// enforces max one net position per default settings above).
+// KNOWN DIFFERENCE from this project's Python backtest engine: when a
+// single bar's range touches BOTH the stop and the limit, the Python
+// engine always resolves it as a stop-loss hit first (a documented,
+// deliberate simplification in fno_signals/strategy.py). Pine's
+// strategy.exit() resolves same-bar stop+limit collisions using its own
+// internal OHLC-based assumption instead, which can occasionally disagree
+// with the Python engine on which side "won" that bar. Enable a bar
+// magnifier (lower timeframe) in TradingView's Strategy Tester settings
+// for higher intrabar precision if this matters for your analysis.
+if callSignal
+    strategy.entry("CALL", strategy.long)
+    strategy.exit("CALL exit", from_entry = "CALL", stop = close - slDist, limit = close + tpDist)
+
+if putSignal
+    strategy.entry("PUT", strategy.short)
+    strategy.exit("PUT exit", from_entry = "PUT", stop = close + slDist, limit = close - tpDist)
+
+// ---------------- Plots (visual parity with the live indicator this mirrors) ----------------
+plot(emaFast, "EMA fast", color = color.new(color.teal, 0))
+plot(emaSlow, "EMA slow", color = color.new(color.orange, 0))
+plot(stLine, "Supertrend", color = stDir < 0 ? color.new(color.green, 0) : color.new(color.red, 0), style = plot.style_linebr)
+plot(useVwap ? vwapValue : na, "VWAP", color = color.new(color.purple, 0))

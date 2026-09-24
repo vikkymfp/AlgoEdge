@@ -1,0 +1,961 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f5f6fa" />
+    <title>AlgoEdge Grid Monitor</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div class="app-layout">
+      <aside class="sidebar" aria-label="Workspace navigation">
+        <nav class="rail-nav">
+          <a class="rail-link active" href="#market-pulse" title="Market pulse">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 17l5-5 4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <small>Pulse</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#backtest-panel" title="Backtesting">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <small>Backtest</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#trade-panel" title="Manual trading">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 17l5-9 4 5 3-4 4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <small>Trade</small>
+          </a>
+          <a class="rail-link" href="#positions-panel" title="Positions">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 3v18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 15l4-5 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <small>Positions</small>
+          </a>
+          <a class="rail-link" href="#orders-panel" title="Orders">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <small>Orders</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#auto-trading-panel" title="Auto trading">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="2"/></svg>
+            <small>Auto</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#reports-panel" title="Reports">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M4 4h16v16H4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 16v-4M12 16V8M16 16v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <small>Reports</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#account-api" title="API Diagnostics">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
+            <small>API</small>
+          </a>
+          <a class="rail-link" href="#broker-panel" title="API Management">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <small>Broker</small>
+          </a>
+          <a class="rail-link" href="#system-health-panel" title="System health">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2-7 4 14 2-7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <small>Health</small>
+          </a>
+
+          <span class="rail-divider" aria-hidden="true"></span>
+          <a class="rail-link" href="#grid-workspace" title="Grid workspace (experimental)">
+            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
+            <small>Grids</small>
+          </a>
+        </nav>
+      </aside>
+      <div class="shell">
+      <header class="topbar">
+        <a class="brand" href="." aria-label="AlgoEdge home">
+          <span class="brand-logo-chip"><img src="logo.png" alt="AlgoEdge" class="brand-logo" /></span>
+        </a>
+        <div class="topbar-actions">
+          <button class="connection-pill broker-pill" id="alertsPill" type="button" title="Open alerts" hidden>
+            <i></i><span id="alertsPillCount">0</span> alert(s)
+          </button>
+          <button class="connection-pill broker-pill" id="brokerStatusPill" type="button" title="Open API Management">
+            <i></i>Checking Groww&hellip;
+          </button>
+          <span class="connection-pill" id="connectionPill"><i></i>Checking feed</span>
+          <button class="connection-pill broker-pill" id="autoStatusPill" type="button" title="Open Auto Trading">
+            <i></i>Auto Disabled
+          </button>
+          <span class="sync-badge" id="syncBadge">3s auto-sync</span>
+          <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh live data" title="Refresh live data">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 10-2.34 5.66M20 11V5m0 6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </header>
+      <button class="critical-banner" id="criticalBanner" type="button" hidden></button>
+
+      <main>
+        <section class="market-strip" id="market-pulse" aria-label="Live Indian indices">
+          <div class="section-heading compact">
+            <div><p class="eyebrow">Market pulse</p></div>
+            <span class="source-label" id="marketSource">Checking live feed</span>
+          </div>
+
+          <div class="system-status-row">
+            <div class="system-status-item">
+              <span>Broker connection</span>
+              <strong id="pulseBrokerStatus"><i class="status-dot"></i>Checking&hellip;</strong>
+              <small class="muted">Groww API - required for manual/live orders</small>
+            </div>
+            <div class="system-status-item">
+              <span>Market data connection</span>
+              <strong id="pulseMarketStatus"><i class="status-dot"></i>Checking&hellip;</strong>
+              <small class="muted">Yahoo Finance feed - independent of the broker connection above</small>
+            </div>
+          </div>
+
+          <div class="market-cards" id="marketCards"></div>
+
+          <div class="chart-panel">
+            <div class="chart-panel-heading">
+              <nav class="index-tabs" id="indexTabs" aria-label="Chart index"></nav>
+              <nav class="timeframe-tabs" id="timeframeTabs" aria-label="Chart timeframe"></nav>
+            </div>
+            <div class="chart-frame">
+              <div class="chart-container" id="chartContainer"></div>
+              <p class="chart-empty" id="chartEmpty" hidden>No candle data returned for this timeframe.</p>
+            </div>
+            <div class="strategy-bar" id="strategyBar">
+              <span class="strategy-action" id="strategyAction">—</span>
+              <span class="strategy-reason" id="strategyReason">Loading signal…</span>
+              <span class="strategy-metric">RSI(14) <strong id="strategyRsi">—</strong></span>
+              <span class="strategy-metric">EMA(20) <strong id="strategyEma">—</strong></span>
+              <span class="strategy-disclaimer">Signal only — no order is placed</span>
+            </div>
+          </div>
+        </section>
+
+        <section id="grid-workspace" hidden>
+          <div class="experimental-banner">
+            <span class="status-tag warning">EXPERIMENTAL</span>
+            <p>Grid trading on cash-delivery equities is not part of AlgoEdge's production NIFTY/BANK NIFTY/SENSEX F&amp;O strategy below and is shown as demo/paper data only. It is not wired to real risk controls, reconciliation, or the Auto Trading engine.</p>
+          </div>
+          <nav class="grid-tabs" id="gridTabs" aria-label="Grid pages"></nav>
+
+        <section class="grid-overview">
+          <div class="grid-title-block">
+            <div class="instrument-icon">R</div>
+            <div>
+              <div class="title-line">
+                <h2 id="gridName">Delta 01</h2>
+                <span class="status-tag" id="gridStatus">RUNNING</span>
+              </div>
+              <p id="gridDescription">RELIANCE · NSE · Cash delivery</p>
+            </div>
+          </div>
+          <div class="overview-metrics">
+            <div><span>Grid range</span><strong id="gridRange">₹2,740 — ₹3,020</strong></div>
+            <div><span>Spacing</span><strong id="gridSpacing">₹20.00</strong></div>
+            <div><span>Realized today</span><strong class="positive" id="realizedPnl">+₹8,460.00</strong></div>
+          </div>
+        </section>
+
+        <section class="position-section">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Position truth</p>
+              <h2>Real Delta position</h2>
+            </div>
+            <span class="source-label" id="sourceLabel">PAPER SNAPSHOT</span>
+          </div>
+          <div class="position-grid">
+            <article class="metric-card featured">
+              <span>Position size</span>
+              <strong id="positionSize">320 <small>shares</small></strong>
+              <em id="positionSide">LONG</em>
+            </article>
+            <article class="metric-card">
+              <span>Average entry</span>
+              <strong id="averageEntry">₹2,864.50</strong>
+              <small class="muted">weighted fill price</small>
+            </article>
+            <article class="metric-card">
+              <span>Mark price</span>
+              <strong id="markPrice">₹2,918.25</strong>
+              <small class="positive" id="markMove">+1.88% from entry</small>
+            </article>
+            <article class="metric-card pnl-card">
+              <span>Unrealized P&amp;L</span>
+              <strong class="positive" id="unrealizedPnl">+₹17,200.00</strong>
+              <small class="positive" id="pnlPercent">+1.88%</small>
+            </article>
+            <article class="metric-card risk-card">
+              <span>Liquidation price</span>
+              <strong id="liquidationPrice">₹2,486.00</strong>
+              <small class="warning" id="liqDistance">14.81% buffer to mark</small>
+            </article>
+          </div>
+        </section>
+
+        <section class="grid-health-section">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Demo grid &middot; paper data</p>
+              <h2>Grid health</h2>
+            </div>
+          </div>
+          <div class="health-score"><strong id="healthScore">—</strong><span>% health</span></div>
+          <div class="health-bar"><span id="healthBar"></span></div>
+          <dl class="health-list">
+            <div><dt>Position utilization</dt><dd id="utilization">—</dd></div>
+            <div><dt>Open order notional</dt><dd id="orderNotional">—</dd></div>
+            <div><dt>Next grid trigger</dt><dd id="nextTrigger">—</dd></div>
+          </dl>
+          <div class="risk-note"><span>!</span><p id="riskMessage"></p></div>
+        </section>
+        </section>
+
+        <section class="panel trade-panel" id="trade-panel" aria-label="Manual trading" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Options &middot; NSE / BSE F&amp;O</p>
+              <h2>Manual trading</h2>
+            </div>
+            <span class="status-tag" id="tradeLiveTag">DRY RUN</span>
+          </div>
+
+          <nav class="index-tabs" id="tradeIndexTabs" aria-label="Trade index"></nav>
+
+          <div class="trade-form">
+            <div class="trade-field">
+              <label for="tradeExpiry">Expiry</label>
+              <select id="tradeExpiry"><option value="">Loading&hellip;</option></select>
+            </div>
+            <div class="trade-field">
+              <label for="tradeStrike">Strike</label>
+              <select id="tradeStrike"><option value="">Select expiry first</option></select>
+            </div>
+            <div class="trade-field">
+              <span class="trade-field-label">Option type</span>
+              <div class="segmented" id="tradeRight">
+                <button type="button" class="segmented-option active" data-value="CE">CE</button>
+                <button type="button" class="segmented-option" data-value="PE">PE</button>
+              </div>
+            </div>
+            <div class="trade-field">
+              <span class="trade-field-label">Side</span>
+              <div class="segmented" id="tradeSide">
+                <button type="button" class="segmented-option active" data-value="BUY">BUY</button>
+                <button type="button" class="segmented-option" data-value="SELL">SELL</button>
+              </div>
+            </div>
+            <div class="trade-field">
+              <label for="tradeOrderType">Order type</label>
+              <select id="tradeOrderType">
+                <option value="MARKET">Market</option>
+                <option value="LIMIT">Limit</option>
+                <option value="SL">Stop-loss (SL)</option>
+                <option value="SL_M">Stop-loss market (SL-M)</option>
+              </select>
+            </div>
+            <div class="trade-field" id="tradePriceField" hidden>
+              <label for="tradePrice">Price</label>
+              <input type="number" id="tradePrice" step="0.05" min="0" placeholder="0.00" />
+            </div>
+            <div class="trade-field" id="tradeTriggerField" hidden>
+              <label for="tradeTrigger">Trigger price</label>
+              <input type="number" id="tradeTrigger" step="0.05" min="0" placeholder="0.00" />
+            </div>
+            <div class="trade-field">
+              <label for="tradeProduct">Product</label>
+              <select id="tradeProduct">
+                <option value="NRML">NRML (carry-forward)</option>
+                <option value="MIS">MIS (intraday)</option>
+              </select>
+            </div>
+            <div class="trade-field">
+              <label for="tradeLots">Lots</label>
+              <input type="number" id="tradeLots" min="1" step="1" value="1" />
+            </div>
+          </div>
+
+          <button class="text-button-solid" type="button" id="tradePreviewButton">Preview order</button>
+
+          <div class="trade-preview" id="tradePreview">
+            <p class="data-empty">Preview an order to see the resolved contract before placing anything.</p>
+          </div>
+
+          <div class="trade-confirm" id="tradeConfirmBlock" hidden>
+            <label class="trade-confirm-check">
+              <input type="checkbox" id="tradeConfirmCheckbox" />
+              I have reviewed this order and want to place it live.
+            </label>
+            <button class="text-button-solid danger" type="button" id="tradePlaceButton" disabled>Place live order</button>
+          </div>
+
+          <div class="trade-result" id="tradeResult"></div>
+
+          <p class="strategy-disclaimer">Every order requires an explicit preview and confirmation before it is sent to Groww</p>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Open &amp; closed round trips</p>
+              <h2>Your manual trades</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Entry</th>
+                  <th>Exit</th>
+                  <th>Status</th>
+                  <th>P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="manualTradesBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel positions-panel" id="positions-panel" hidden>
+
+          <div class="broker-mini-card" id="positionsBrokerCard">
+            <button type="button" class="broker-mini-summary" id="positionsBrokerToggle" aria-expanded="false">
+              <span class="broker-mini-status">
+                <i class="status-dot"></i>
+                <strong id="posBrokerConnLabel">Checking&hellip;</strong>
+              </span>
+              <span class="status-tag" id="posBrokerSourceTag">LIVE BROKER DATA</span>
+              <span class="text-faint-note" id="posBrokerLastSync">Last sync —</span>
+              <span class="broker-mini-view">View <svg class="chevron" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+            </button>
+            <div class="broker-mini-details" id="positionsBrokerDetails" hidden>
+              <div class="account-summary compact" id="posBrokerDetailsGrid"></div>
+            </div>
+          </div>
+
+          <div class="positions-summary-strip" id="positionsSummaryStrip">
+            <div class="summary-stat"><span>Open positions</span><strong id="summaryOpenPositions">0</strong></div>
+            <div class="summary-stat"><span>Exposure</span><strong id="summaryExposure">—</strong></div>
+            <div class="summary-stat"><span>Unrealized P&amp;L</span><strong id="summaryUnrealizedPnl">—</strong></div>
+            <div class="summary-stat"><span>Realized P&amp;L</span><strong id="summaryRealizedPnl">—</strong></div>
+          </div>
+
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">All symbols &middot; primary view</p>
+              <h2>Open positions <span id="openPositionsCount">0</span></h2>
+            </div>
+            <span class="source-label" id="positionsSource">Loading positions</span>
+          </div>
+          <div class="table-wrap" id="positionsTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Qty</th>
+                  <th>Avg price</th>
+                  <th>LTP</th>
+                  <th>Unrealized P&amp;L</th>
+                  <th>Realized P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="positionsBody"></tbody>
+            </table>
+          </div>
+          <div class="compact-empty-state" id="positionsEmptyState" hidden>
+            <span class="status-tag">FLAT</span>
+            <p>No open positions right now.</p>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">From recorded trade history</p>
+              <h2>P&amp;L summary</h2>
+            </div>
+          </div>
+          <div class="positions-summary-strip pnl-strip" id="pnlSummary">
+            <div class="summary-stat">
+              <span>Realized P&amp;L</span><strong id="pnlTotalRealized">—</strong>
+              <small class="text-faint-note">Live <span id="pnlLiveRealized">—</span> &middot; Paper <span id="pnlPaperRealized">—</span></small>
+            </div>
+            <div class="summary-stat">
+              <span>Unrealized P&amp;L</span><strong id="pnlPaperUnrealized">—</strong>
+              <small class="text-faint-note" id="pnlLiveUnrealizedNote"></small>
+            </div>
+            <div class="summary-stat"><span>Net P&amp;L</span><strong id="pnlNetTotal">—</strong></div>
+            <div class="summary-stat">
+              <span>Trading costs</span><strong id="pnlLiveCosts">—</strong>
+              <small class="text-faint-note" id="pnlCostModelNote"></small>
+            </div>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">DB orders vs live Groww positions</p>
+              <h2>Position reconciliation</h2>
+            </div>
+            <span class="status-tag" id="reconcileStatusTag">Checking&hellip;</span>
+          </div>
+          <div class="broker-result" id="reconcileGateBanner" hidden></div>
+          <div class="auto-controls" id="reconcileOverrideControls" hidden>
+            <button class="text-button-solid danger" type="button" id="reconcileOverrideButton">Override block (60 min)</button>
+            <button class="text-button" type="button" id="reconcileOverrideClearButton">Clear override</button>
+          </div>
+          <div class="reconcile-all-match" id="reconcileAllMatch" hidden>
+            <span class="status-tag">&#10003;</span>
+            <strong>ALL MATCH</strong>
+            <span class="text-faint-note" id="reconcileAllMatchNote"></span>
+          </div>
+          <div class="table-wrap" id="reconcileTableWrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Symbol</th>
+                  <th>Expected qty</th>
+                  <th>Actual qty</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="reconcileBody"></tbody>
+            </table>
+          </div>
+          <div class="trade-preview" id="reconcileUnconfirmed" hidden></div>
+        </section>
+
+        <section id="orders-panel" hidden>
+        <div class="lower-grid">
+          <article class="panel orders-card">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Execution history</p>
+                <h2>Orders <span id="orderCount">0</span></h2>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Symbol</th>
+                    <th>Side</th>
+                    <th>Qty</th>
+                    <th>Actual price</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="ordersBody"></tbody>
+              </table>
+            </div>
+          </article>
+
+          <aside class="panel health-panel">
+            <div class="panel-heading">
+              <div>
+                <p class="eyebrow">Order execution &middot; today</p>
+                <h2>Execution health</h2>
+              </div>
+              <span class="health-dot"></span>
+            </div>
+            <div class="health-score"><strong id="execHealthScore">—</strong><span>% success</span></div>
+            <div class="health-bar"><span id="execHealthBar"></span></div>
+            <dl class="health-list">
+              <div><dt>Orders today</dt><dd id="execOrdersToday">0</dd></div>
+              <div><dt>Filled / success</dt><dd id="execFilled">0</dd></div>
+              <div><dt>Pending / unconfirmed</dt><dd id="execPending">0</dd></div>
+              <div><dt>Rejected / failed</dt><dd id="execFailed">0</dd></div>
+            </dl>
+            <div class="risk-note" id="execHealthNote" hidden><span>!</span><p id="execHealthMessage"></p></div>
+          </aside>
+        </div>
+
+        <section class="panel ledger-panel">
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">All sources &middot; paper + live</p>
+              <h2>Trade ledger</h2>
+            </div>
+            <div class="ledger-filters">
+              <select id="ledgerSourceFilter">
+                <option value="">All sources</option>
+                <option value="algoedge.manual_trading">Manual trading</option>
+                <option value="algoedge.auto_trader">Auto trading (paper)</option>
+                <option value="fno_signals">F&amp;O scanner</option>
+              </select>
+              <select id="ledgerLiveFilter">
+                <option value="">Live + paper</option>
+                <option value="true">Live only</option>
+                <option value="false">Paper only</option>
+              </select>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Source</th>
+                  <th>Symbol</th>
+                  <th>Side</th>
+                  <th>Requested qty</th>
+                  <th>Filled / remaining</th>
+                  <th>Requested price</th>
+                  <th>Avg fill price</th>
+                  <th>Outcome</th>
+                </tr>
+              </thead>
+              <tbody id="ledgerBody"></tbody>
+            </table>
+          </div>
+        </section>
+        </section>
+
+        <section class="panel auto-panel" id="auto-trading-panel" aria-label="Auto trading" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Signal-driven execution &middot; paper accounts only</p>
+              <h2>Auto Trading</h2>
+            </div>
+          </div>
+
+          <div class="auto-control-card" id="autoControlCard">
+            <div class="auto-status-line">
+              <span class="auto-status-dot" id="autoStatusDot"></span>
+              <span>Status:</span>
+              <span class="status-tag" id="autoEnabledTag">DISABLED</span>
+              <span class="status-tag danger" id="autoLossHaltTag" hidden>CONSECUTIVE LOSS HALT</span>
+            </div>
+            <div class="auto-controls">
+              <button class="text-button-solid" type="button" id="autoToggleButton">Enable Auto Trading</button>
+              <button class="text-button-solid danger" type="button" id="autoKillButton">Kill Switch</button>
+              <button class="text-button-solid danger" type="button" id="autoLossHaltResetButton" hidden>Reset loss halt</button>
+            </div>
+            <div class="auto-kill-armed-card" id="autoKillArmedCard" hidden>
+              <span class="status-tag danger" id="autoKillTag">KILL SWITCH ARMED</span>
+              <p id="autoKillReasonNote"></p>
+            </div>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Read-only context from fno_signals' live-resolved contracts &middot; informational only, not traded by this scheduler</p>
+              <h2>Live Option Market</h2>
+            </div>
+            <nav class="index-tabs" id="optionMarketIndexTabs" aria-label="Option market index"></nav>
+          </div>
+          <div class="option-market-summary">
+            <div class="summary-stat"><span>Underlying</span><strong id="optUnderlyingName">—</strong></div>
+            <div class="summary-stat"><span>Spot</span><strong id="optSpot">—</strong></div>
+            <div class="summary-stat"><span>ATM Strike</span><strong id="optAtmStrike">—</strong></div>
+            <div class="summary-stat"><span>Expiry</span><strong id="optExpiry">—</strong></div>
+          </div>
+          <p class="text-faint-note" id="optSignalAsOf"></p>
+          <div class="option-leg-grid">
+            <article class="option-leg-card call">
+              <div class="option-leg-heading"><span class="status-tag">CALL</span><span class="option-leg-signal" id="optCallSignal">—</span></div>
+              <h3 id="optCallSymbol">—</h3>
+              <div class="option-leg-premium"><span>Premium</span><strong id="optCallPremium">—</strong></div>
+              <div class="option-leg-bidask">
+                <div><span>Bid</span><strong id="optCallBid">—</strong></div>
+                <div><span>Ask</span><strong id="optCallAsk">—</strong></div>
+                <div><span>LTP</span><strong id="optCallLtp">—</strong></div>
+              </div>
+              <p class="text-faint-note" id="optCallQuoteNote"></p>
+              <div class="option-leg-lot">
+                <div><span>1 Lot</span><strong id="optCallLotSize">—</strong></div>
+                <div><span>1 Lot Value</span><strong id="optCallLotValue">—</strong></div>
+              </div>
+            </article>
+            <article class="option-leg-card put">
+              <div class="option-leg-heading"><span class="status-tag">PUT</span><span class="option-leg-signal" id="optPutSignal">—</span></div>
+              <h3 id="optPutSymbol">—</h3>
+              <div class="option-leg-premium"><span>Premium</span><strong id="optPutPremium">—</strong></div>
+              <div class="option-leg-bidask">
+                <div><span>Bid</span><strong id="optPutBid">—</strong></div>
+                <div><span>Ask</span><strong id="optPutAsk">—</strong></div>
+                <div><span>LTP</span><strong id="optPutLtp">—</strong></div>
+              </div>
+              <p class="text-faint-note" id="optPutQuoteNote"></p>
+              <div class="option-leg-lot">
+                <div><span>1 Lot</span><strong id="optPutLotSize">—</strong></div>
+                <div><span>1 Lot Value</span><strong id="optPutLotValue">—</strong></div>
+              </div>
+            </article>
+          </div>
+          <div class="option-market-summary">
+            <div class="summary-stat"><span>Available margin</span><strong id="optAvailableMargin">—</strong></div>
+            <div class="summary-stat"><span>Max lots allowed</span><strong id="optMaxLots">—</strong></div>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Why an order would be allowed or blocked</p>
+              <h2>Critical gates</h2>
+            </div>
+          </div>
+          <div class="system-status-row" id="autoGatesRow">
+            <div class="system-status-item" id="autoGateBroker"><span>Broker</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="autoGateRisk"><span>Risk engine</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="autoGateReconciliation"><span>Reconciliation</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="autoGateMarketData"><span>Market data</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="autoGateSignalEngine"><span>Signal engine</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+          </div>
+
+          <p class="strategy-disclaimer auto-disclaimer" id="autoSchedulerNote">Background scheduler runs every 5 minutes for all indices while enabled. Paper execution only — no live order is ever placed by Auto Trading.</p>
+
+          <div class="account-summary auto-summary">
+            <div class="account-stat"><span>Trades today</span><strong id="autoTradesToday">0</strong></div>
+            <div class="account-stat"><span>Realized P&amp;L today</span><strong id="autoRealizedPnl">₹0.00</strong></div>
+            <div class="account-stat"><span>Max open positions</span><strong id="autoMaxOpenPositions">—</strong></div>
+            <div class="account-stat"><span>Daily loss limit</span><strong id="autoDailyLossLimit">—</strong></div>
+            <div class="account-stat"><span>Entry cutoff</span><strong id="autoEntryCutoff">—</strong></div>
+            <div class="account-stat"><span>Square-off time</span><strong id="autoSquareOffTime">—</strong></div>
+            <div class="account-stat"><span>Cooldown after exit</span><strong id="autoCooldownMinutes">—</strong></div>
+            <div class="account-stat"><span>Consecutive losses</span><strong id="autoConsecutiveLosses">0</strong></div>
+          </div>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Index</th><th>Position</th><th>Avg price</th><th>Simulated cash</th></tr>
+              </thead>
+              <tbody id="autoAccountsBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Manual override</p>
+              <h2>Run a cycle now</h2>
+            </div>
+          </div>
+          <nav class="index-tabs" id="autoRunIndexTabs" aria-label="Auto trading run index"></nav>
+          <div class="auto-controls">
+            <button class="text-button-solid" type="button" id="autoRunButton">Run cycle now</button>
+          </div>
+          <div class="auto-result" id="autoResult">
+            <p class="data-empty">Run a cycle to see the latest signal, risk decision, and order outcome.</p>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Closed round trips &middot; this strategy only</p>
+              <h2>Performance</h2>
+            </div>
+          </div>
+          <div class="account-summary auto-summary">
+            <div class="account-stat"><span>Closed trades</span><strong id="autoPerfTrades">0</strong></div>
+            <div class="account-stat"><span>Win rate</span><strong id="autoPerfWinRate">—</strong></div>
+            <div class="account-stat"><span>Total P&amp;L</span><strong id="autoPerfTotalPnl">₹0.00</strong></div>
+          </div>
+          <div class="chart-panel">
+            <div class="chart-panel-heading">
+              <p class="eyebrow">Cumulative paper P&amp;L over time</p>
+            </div>
+            <div class="chart-frame">
+              <div class="chart-container compact" id="autoEquityChart"></div>
+              <p class="chart-empty" id="autoEquityEmpty" hidden>No closed paper trades yet.</p>
+            </div>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Most recent signals generated</p>
+              <h2>Signal log</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Time</th><th>Index</th><th>Action</th><th>Reason</th><th>Price</th></tr>
+              </thead>
+              <tbody id="autoSignalsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="panel reports-panel" id="reports-panel" aria-label="Reports" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Cross-cutting analytics &middot; signals + orders + P&amp;L</p>
+              <h2>Daily trading summary</h2>
+            </div>
+            <span class="source-label" id="reportsSource">Last 30 days</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Signals</th>
+                  <th>Orders (live / paper)</th>
+                  <th>Outcomes</th>
+                  <th>Realized P&amp;L</th>
+                </tr>
+              </thead>
+              <tbody id="dailySummaryBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Last 30 days &middot; how many signals became orders, and orders became fills</p>
+              <h2>Signal &rarr; Order &rarr; Fill conversion</h2>
+            </div>
+          </div>
+          <div class="account-summary" id="conversionSummary">
+            <div class="account-stat"><span>Signals generated</span><strong id="convSignals">—</strong></div>
+            <div class="account-stat"><span>Signal &rarr; Order</span><strong id="convSignalToOrder">—</strong></div>
+            <div class="account-stat"><span>Orders placed</span><strong id="convOrders">—</strong></div>
+            <div class="account-stat"><span>Order &rarr; Fill</span><strong id="convOrderToFill">—</strong></div>
+            <div class="account-stat"><span>Filled</span><strong id="convFilled">—</strong></div>
+          </div>
+          <p class="data-empty data-empty-left">A signal not becoming an order can be intentional (risk engine or duplicate-order protection refusing it), not necessarily a failure.</p>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Rolled up from the daily summary above</p>
+              <h2>Weekly / monthly P&amp;L</h2>
+            </div>
+            <div class="segmented" id="periodSummaryToggle">
+              <button type="button" class="segmented-option active" data-period="weekly">Weekly</button>
+              <button type="button" class="segmented-option" data-period="monthly">Monthly</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Period</th>
+                  <th>Signals</th>
+                  <th>Orders (live / paper)</th>
+                  <th>Realized P&amp;L (live / paper)</th>
+                </tr>
+              </thead>
+              <tbody id="periodSummaryBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Closed round trips, grouped by source</p>
+              <h2>Strategy performance</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Source</th>
+                  <th>Closed trades</th>
+                  <th>Win rate</th>
+                  <th>Total P&amp;L</th>
+                  <th>Avg P&amp;L</th>
+                  <th>Best</th>
+                  <th>Worst</th>
+                </tr>
+              </thead>
+              <tbody id="strategyPerformanceBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">In-app only &middot; no external channel is configured</p>
+              <h2>Alerts</h2>
+            </div>
+            <button class="text-button" type="button" id="acknowledgeAllAlertsButton">Acknowledge all</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Time</th><th>Severity</th><th>Category</th><th>Message</th><th>Source</th><th></th></tr>
+              </thead>
+              <tbody id="alertsBody"></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="api-section" id="account-api" aria-label="Available API data" hidden>
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Broker data &middot; read-only diagnostics, not credential management</p>
+              <h2>API Diagnostics</h2>
+            </div>
+            <span class="source-label" id="accountSource">Loading account data</span>
+          </div>
+          <div class="account-summary" id="accountSummary"></div>
+          <div class="api-panels">
+            <details class="api-panel" open><summary>Profile and permissions</summary><div id="profileData"></div></details>
+            <details class="api-panel" open><summary>Margin and funds</summary><div id="marginData"></div></details>
+            <details class="api-panel"><summary>Holdings <span id="holdingsCount">0</span></summary><div id="holdingsData"></div></details>
+            <details class="api-panel"><summary>All positions <span id="positionsCount">0</span></summary><div id="positionsData"></div></details>
+            <details class="api-panel"><summary>Orders and trades <span id="ordersDataCount">0</span></summary><div id="ordersData"></div></details>
+            <details class="api-panel"><summary>Instrument master and live-data permissions</summary><div id="instrumentData"></div></details>
+          </div>
+        </section>
+
+        <section class="panel broker-panel" id="broker-panel" aria-label="API Management" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Credential &amp; token management</p>
+              <h2>API Management</h2>
+            </div>
+            <span class="status-tag" id="brokerConnectionTag">CHECKING</span>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div><h2>Groww connection</h2></div>
+          </div>
+          <dl class="broker-fact-list">
+            <dt>API Key</dt><dd class="mono" id="brokerApiKeyMasked">—</dd>
+            <dt>API Secret</dt><dd class="mono" id="brokerApiSecretMasked">—</dd>
+            <dt>Access Token</dt><dd class="mono" id="brokerAccessTokenMasked">—</dd>
+          </dl>
+          <div class="auto-controls">
+            <button class="text-button-solid" type="button" id="brokerUpdateTokenButton">Update access token</button>
+            <button class="text-button-solid" type="button" id="brokerUpdateCredentialsButton">Update API key &amp; secret</button>
+            <button class="text-button-solid" type="button" id="brokerTestConnectionButton">Test connection</button>
+          </div>
+          <p class="broker-result" id="brokerActionResult"></p>
+
+          <form class="trade-form broker-form" id="brokerTokenForm" hidden>
+            <div class="trade-field">
+              <label for="brokerAccessTokenInput">New Groww access token</label>
+              <input type="password" id="brokerAccessTokenInput" autocomplete="off" placeholder="Paste the token from Groww" />
+            </div>
+            <div class="broker-form-actions">
+              <button class="text-button-solid" type="submit" id="brokerTokenSubmit">Validate &amp; save</button>
+              <button class="text-button" type="button" id="brokerTokenCancel">Cancel</button>
+            </div>
+          </form>
+
+          <form class="trade-form broker-form" id="brokerCredentialsForm" hidden>
+            <div class="trade-field">
+              <label for="brokerApiKeyInput">Groww API key</label>
+              <input type="password" id="brokerApiKeyInput" autocomplete="off" placeholder="API key" />
+            </div>
+            <div class="trade-field">
+              <label for="brokerApiSecretInput">Groww API secret</label>
+              <input type="password" id="brokerApiSecretInput" autocomplete="off" placeholder="API secret" />
+            </div>
+            <div class="broker-form-actions">
+              <button class="text-button-solid" type="submit" id="brokerCredentialsSubmit">Validate &amp; save</button>
+              <button class="text-button" type="button" id="brokerCredentialsCancel">Cancel</button>
+            </div>
+          </form>
+
+          <div class="panel-heading reconcile-heading">
+            <div><h2>Token information</h2></div>
+          </div>
+          <dl class="broker-fact-list">
+            <dt>Token status</dt><dd id="brokerTokenStatus">—</dd>
+            <dt>Token created</dt><dd id="brokerTokenCreatedAt">—</dd>
+            <dt>Token expiry</dt><dd id="brokerTokenExpiryAt">Not published by Groww for this auth method</dd>
+            <dt>Last validated</dt><dd id="brokerLastValidatedAt">—</dd>
+            <dt>Last successful API request</dt><dd id="brokerLastSuccessAt">—</dd>
+            <dt>Last error</dt><dd id="brokerLastError">—</dd>
+            <dt>Credentials persisted</dt><dd id="brokerPersisted">—</dd>
+          </dl>
+
+          <div class="panel-heading reconcile-heading">
+            <div>
+              <p class="eyebrow">Credential and validation events - never the raw secret</p>
+              <h2>Token history</h2>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>Time</th><th>Event</th><th>Status</th><th>Reference</th><th>Error</th></tr>
+              </thead>
+              <tbody id="brokerHistoryBody"></tbody>
+            </table>
+          </div>
+
+          <div class="panel-heading reconcile-heading">
+            <div><h2>Security</h2></div>
+          </div>
+          <p class="strategy-disclaimer broker-security-note">
+            Credentials are encrypted at rest and never sent to the browser in full. The API secret and
+            access token are always masked here; only a short, non-reversible reference is kept in the
+            history above. Nothing on this page ever places a trade.
+          </p>
+        </section>
+
+        <section class="panel" id="system-health-panel" aria-label="System health" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Operational overview &middot; read-only aggregation of other pages' state</p>
+              <h2>System Health</h2>
+            </div>
+          </div>
+          <div class="system-status-row">
+            <div class="system-status-item" id="healthDatabase"><span>Database</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="healthBroker"><span>Groww API</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="healthReconciliation"><span>Reconciliation</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="healthRisk"><span>Risk engine</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+          </div>
+          <div class="account-summary">
+            <div class="account-stat"><span>Last signal</span><strong id="healthLastSignal">—</strong></div>
+            <div class="account-stat"><span>Last broker sync</span><strong id="healthLastBrokerSync">—</strong></div>
+            <div class="account-stat"><span>Last database write</span><strong id="healthLastDbWrite">—</strong></div>
+            <div class="account-stat"><span>Last reconciliation check</span><strong id="healthLastReconciliation">—</strong></div>
+          </div>
+          <p class="data-empty data-empty-left" id="healthLastError" hidden></p>
+        </section>
+
+        <section class="panel backtest-panel" id="backtest-panel" aria-label="Backtesting" hidden>
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Runs the real live-signal strategy against historical data &middot; never places an order</p>
+              <h2>Backtest</h2>
+            </div>
+          </div>
+
+          <nav class="index-tabs" id="backtestIndexTabs" aria-label="Backtest index"></nav>
+
+          <div class="trade-form backtest-form">
+            <div class="trade-field">
+              <label for="backtestInterval">Timeframe</label>
+              <select id="backtestInterval">
+                <option value="1m">1m (~7 days)</option>
+                <option value="5m" selected>5m (~60 days)</option>
+                <option value="15m">15m (~60 days)</option>
+                <option value="1h">1h (~2 years)</option>
+                <option value="1d">1D (~5 years)</option>
+              </select>
+            </div>
+            <div class="trade-field">
+              <label for="backtestSlippage">Assumed slippage (points)</label>
+              <input type="number" id="backtestSlippage" min="0" step="0.5" value="0" />
+            </div>
+            <div class="trade-field">
+              <span class="trade-field-label">Mode</span>
+              <div class="segmented" id="backtestModeToggle">
+                <button type="button" class="segmented-option active" data-mode="single">Full period</button>
+                <button type="button" class="segmented-option" data-mode="split">Train / validation / out-of-sample</button>
+              </div>
+            </div>
+          </div>
+
+          <button class="text-button-solid" type="button" id="backtestRunButton">Run backtest</button>
+
+          <p class="strategy-disclaimer" id="backtestDisclaimer"></p>
+
+          <div id="backtestResult">
+            <p class="data-empty">Run a backtest to see results.</p>
+          </div>
+        </section>
+      </main>
+      <footer><span>AlgoEdge / private workspace</span><span id="footerMode">Paper data until API feed is connected</span></footer>
+      </div>
+    </div>
+    <script src="app.js"></script>
+  </body>
+</html>

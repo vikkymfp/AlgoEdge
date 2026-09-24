@@ -1,0 +1,15 @@
+README.md
+pyproject.toml
+src/algoedge/__init__.py
+src/algoedge/config.py
+src/algoedge/connect_groww.py
+src/algoedge/groww_broker.py
+src/algoedge/main.py
+src/algoedge/market_data.py
+src/algoedge/paper_broker.py
+src/algoedge/strategy.py
+src/algoedge.egg-info/PKG-INFO
+src/algoedge.egg-info/SOURCES.txt
+src/algoedge.egg-info/dependency_links.txt
+src/algoedge.egg-info/top_level.txt
+tests/test_strategy.py

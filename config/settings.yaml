@@ -1,0 +1,8 @@
+environment: development
+symbol: AAPL
+period: 6mo
+interval: 1d
+short_window: 20
+long_window: 50
+initial_cash: 100000
+live_trading: false

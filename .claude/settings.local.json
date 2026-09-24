@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python.exe -m pytest -q)",
+      "Bash(.venv/Scripts/python.exe -m pytest -q tests/test_scheduler.py tests/test_auto_trading_report.py tests/test_auto_trader.py)",
+      "PowerShell(Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object { \\(Get-NetTCPConnection -OwningProcess $_.Id -ErrorAction SilentlyContinue | Where-Object LocalPort -eq 5173\\) } | Stop-Process -Force -Confirm:$false; Start-Sleep -Milliseconds 500; \"checked\")",
+      "Bash(.venv/Scripts/python.exe -m algoedge.web_server)",
+      "Bash(curl -s http://127.0.0.1:5173/api/auto-trading/status)",
+      "Bash(curl -s \"http://127.0.0.1:5173/api/auto-trading/signals?limit=5\")",
+      "Bash(curl -s \"http://127.0.0.1:5173/api/auto-trading/equity-curve\")",
+      "Bash(curl -s \"http://127.0.0.1:5173/api/pnl\")",
+      "Bash(curl -s \"http://127.0.0.1:5173/api/reports/strategy-performance\")"
+    ]
+  }
+}
