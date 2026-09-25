@@ -324,6 +324,60 @@ def _score(s: Summary, min_trades: int) -> float:
     return s.expectancy
 
 
+class _TradeIndex:
+    """One variant's trades, indexed by IST entry/exit date for O(log n)
+    window lookups. Only trades entered on one of the walk-forward trading
+    days are indexed (exactly the trades the per-window day-set test could
+    ever select); lookups return them in their original list order."""
+
+    def __init__(self, trades: list[BacktestTrade], day_ordinals: set[int]) -> None:
+        def ordinal(ts) -> int:
+            return pd.Timestamp(ts).tz_convert(IST_TZ).date().toordinal()
+
+        kept = [(ordinal(t.entry_time), pos, t) for pos, t in enumerate(trades)]
+        kept = [row for row in kept if row[0] in day_ordinals]
+        kept.sort(key=lambda row: row[0])  # stable: equal days keep list order
+        self._entry = np.array([row[0] for row in kept], dtype=np.int64)
+        self._pos = np.array([row[1] for row in kept], dtype=np.int64)
+        self._exit = np.array([ordinal(row[2].exit_time) for row in kept], dtype=np.int64)
+        self._trades = [row[2] for row in kept]
+
+    def _pick(self, first: int, last: int, exit_by: int | None) -> list[BacktestTrade]:
+        lo = int(np.searchsorted(self._entry, first, side="left"))
+        hi = int(np.searchsorted(self._entry, last, side="right"))
+        idx = np.arange(lo, hi)
+        if exit_by is not None:
+            idx = idx[self._exit[lo:hi] <= exit_by]
+        idx = idx[np.argsort(self._pos[idx], kind="stable")]  # original list order
+        return [self._trades[i] for i in idx]
+
+    def entered(self, first: int, last: int) -> list[BacktestTrade]:
+        return self._pick(first, last, None)
+
+    def entered_and_closed(self, first: int, last: int) -> list[BacktestTrade]:
+        return self._pick(first, last, last)
+
+
+def window_bounds(
+    n_days: int, train_days: int, test_days: int, *, step_days: int, anchored: bool, warmup_days: int,
+) -> list[tuple[int, int, int, int]]:
+    """(train_start, train_end, test_start, test_end) as half-open indices into
+    the trading-day list. Warm-up days (the first `warmup_days`) are never in
+    any window. Rolling: a fixed-length train block slides by `step_days`.
+    Anchored: train always starts at the first post-warm-up day and grows by
+    `step_days`. Test always follows train immediately and has `test_days`."""
+    if min(train_days, test_days, step_days) < 1 or warmup_days < 0:
+        raise ValueError("train_days, test_days and step_days must be >= 1 and warmup_days >= 0")
+    bounds = []
+    first = warmup_days
+    train_end = first + train_days
+    while train_end + test_days <= n_days:
+        train_start = first if anchored else train_end - train_days
+        bounds.append((train_start, train_end, train_end, train_end + test_days))
+        train_end += step_days
+    return bounds
+
+
 def walk_forward(
     df: pd.DataFrame,
     trades_by_variant: dict[str, list[BacktestTrade]],
@@ -331,44 +385,68 @@ def walk_forward(
     train_days: int = 20,
     test_days: int = 5,
     min_train_trades: int = 8,
+    *,
+    step_days: int | None = None,
+    anchored: bool = False,
+    warmup_days: int = 0,
+    train_exit_cutoff: bool = True,
 ) -> WalkForwardResult:
-    """Rolling by trading day: in each window, pick the variant with the best
-    TRAIN expectancy (minimum trade count, never win rate), then record how
-    that pick did on the following, unseen TEST days. Trades come from one
-    continuous run per variant (causal indicators), assigned by entry time."""
+    """Walk-forward by trading day: in each window, pick the variant with the
+    best TRAIN expectancy (minimum trade count, never win rate; ties go to the
+    baseline, and the baseline is the fallback when nothing qualifies), then
+    record how that pick did on the following, unseen TEST days.
+
+    Trades come from one continuous run per variant (causal indicators); a
+    picked variant's test trades are its own continuous-history trades.
+    Test trades are attributed by entry day.
+
+    Leakage control (`train_exit_cutoff`, on by default): a trade only counts
+    toward TRAIN scoring if it was entered in the train block AND closed by
+    the train block's last day - the strategy holds overnight, so a trade
+    still open at train end would otherwise let prices from the test block
+    influence the selection. `train_exit_cutoff=False` reproduces the
+    pre-Phase-6 behaviour exactly (entry day only).
+
+    Windows: `step_days` defaults to `test_days` (non-overlapping test
+    blocks); `anchored=True` grows the train block from the first post-warm-up
+    day instead of rolling it; the first `warmup_days` trading days (indicator
+    warm-up) are excluded from every window."""
     local = df.index.tz_convert(IST_TZ) if df.index.tz is not None else df.index
     days = sorted(set(local.date))
+    ordinals = [d.toordinal() for d in days]
+    index = {name: _TradeIndex(trades, set(ordinals)) for name, trades in trades_by_variant.items()}
     windows = []
     picked_oos: list[BacktestTrade] = []
     base_oos: list[BacktestTrade] = []
-    start = 0
 
-    def in_days(trades, day_set):
-        return [t for t in trades if pd.Timestamp(t.entry_time).tz_convert(IST_TZ).date() in day_set]
+    for train_start, train_end, test_start, test_end in window_bounds(
+        len(days), train_days, test_days, step_days=step_days or test_days, anchored=anchored,
+        warmup_days=warmup_days,
+    ):
+        train_first, train_last = ordinals[train_start], ordinals[train_end - 1]
+        test_first, test_last = ordinals[test_start], ordinals[test_end - 1]
 
-    while start + train_days + test_days <= len(days):
-        train_set = set(days[start:start + train_days])
-        test_set = set(days[start + train_days:start + train_days + test_days])
-        scores = {
-            name: _score(summarize(in_days(trades, train_set)), min_train_trades)
-            for name, trades in trades_by_variant.items()
-        }
+        def train_trades(name: str) -> list[BacktestTrade]:
+            ix = index[name]
+            if train_exit_cutoff:
+                return ix.entered_and_closed(train_first, train_last)
+            return ix.entered(train_first, train_last)
+
+        scores = {name: _score(summarize(train_trades(name)), min_train_trades) for name in trades_by_variant}
         best = max(scores, key=lambda k: (scores[k], k == baseline_name))
         if scores[best] == float("-inf"):
             best = baseline_name
-        test_pick = in_days(trades_by_variant[best], test_set)
-        test_base = in_days(trades_by_variant[baseline_name], test_set)
+        test_pick = index[best].entered(test_first, test_last)
+        test_base = index[baseline_name].entered(test_first, test_last)
         picked_oos += test_pick
         base_oos += test_base
         windows.append({
-            "train": f"{min(train_set)}..{max(train_set)}", "test": f"{min(test_set)}..{max(test_set)}",
+            "train": f"{days[train_start]}..{days[train_end - 1]}", "test": f"{days[test_start]}..{days[test_end - 1]}",
             "picked": best, "picked_train_expectancy": scores[best],
             "picked_test_net": sum(t.points for t in test_pick),
             "baseline_test_net": sum(t.points for t in test_base),
         })
-        start += test_days
     return WalkForwardResult(windows, summarize(picked_oos), summarize(base_oos))
-
 
 
 # ---------------------------------------------------------------- helpers
