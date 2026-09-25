@@ -46,6 +46,8 @@ ALGOEDGE_GROWW_ACCESS_TOKEN=your_token
 
 Alternatively, use `ALGOEDGE_GROWW_API_KEY` and `ALGOEDGE_GROWW_API_SECRET`. Do not commit `.env` or share these values. The access-token flow expires daily; API-key and secret authentication requires the daily approval required by Groww.
 
+The `.env` values are the initial/fallback configuration. Credentials saved from the dashboard's API Management page are stored encrypted in the database (when `ALGOEDGE_DB_SERVER` and `ALGOEDGE_CREDENTIAL_ENCRYPTION_KEY` are set) and take priority over `.env`. The dashboard, `python -m algoedge.connect_groww`, and `python -m fno_signals.main --live` all resolve credentials the same way; saving from API Management never edits `.env`.
+
 Check the authenticated connection without placing an order:
 
 ```powershell
