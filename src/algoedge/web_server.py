@@ -617,9 +617,15 @@ def manual_trading_place_order(
             detail="Live trading is disabled. Set ALGOEDGE_LIVE_TRADING=true to place real orders.",
         )
     # Order Request -> API Connection Check -> Token Valid? -> ... -> Groww API.
-    # Checked up front, before resolving a contract or touching the broker
-    # at all, so a stale/missing connection never gets partway through an
-    # order attempt.
+    # Checked up front, before resolving a contract or placing anything, so
+    # a missing connection never gets partway through an order attempt.
+    # effective_client() runs first so an expired session is regenerated
+    # from the API key/secret rather than rejected on a stale status; a
+    # genuine authentication failure (no session obtainable) still blocks.
+    try:
+        token_service.effective_client()
+    except BrokerNotConnectedError:
+        pass  # reported by the connection check just below
     if not token_service.is_connected():
         raise HTTPException(
             status_code=503,

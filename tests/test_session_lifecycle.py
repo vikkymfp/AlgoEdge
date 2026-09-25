@@ -324,3 +324,186 @@ def test_restart_regenerates_an_expired_stored_session_from_stored_key_and_secre
 
     assert current_token(restarted) == "session-2"
     assert restarted.current_connection_status() == "CONNECTED"
+
+
+# -- fix 1: fno_signals --live renews its session for the whole run -----------
+
+
+def fno_live_session(monkeypatch):
+    from fno_signals import broker as fno_broker_module
+
+    monkeypatch.setattr(
+        fno_broker_module, "get_settings",
+        lambda: make_settings(groww_api_key=API_KEY, groww_api_secret=API_SECRET),
+    )
+    return fno_broker_module.generate_daily_session()
+
+
+def resolved_contract():
+    from datetime import date
+
+    from fno_signals.broker import ResolvedContract
+
+    return ResolvedContract(
+        trading_symbol="NIFTY26SEP23200PE", exchange="NSE", expiry_date=date(2026, 9, 29),
+        strike=23200, right="PE", lot_size=75,
+    )
+
+
+def test_fno_live_regenerates_an_expired_session_mid_run(groww, monkeypatch) -> None:
+    client = fno_live_session(monkeypatch)
+    assert client.token == "session-1"
+
+    groww.expired.add("session-1")  # Groww's daily reset, mid-run
+    with pytest.raises(GrowwAPIAuthenticationException):
+        client.get_positions_for_user(segment="FNO")
+
+    # The next broker operation gets a fresh session - no restart needed.
+    assert client.get_positions_for_user(segment="FNO") == {"positions": []}
+    assert client.token == "session-2"
+    assert groww.minted == ["session-1", "session-2"]
+
+
+def test_fno_live_order_on_an_expired_session_fails_once_and_is_not_retried(groww, monkeypatch) -> None:
+    from fno_signals.broker import execute_market_order
+
+    client = fno_live_session(monkeypatch)
+    groww.expired.add("session-1")
+
+    with pytest.raises(GrowwAPIAuthenticationException):
+        execute_market_order(client, resolved_contract(), quantity=75)
+    client.get_positions_for_user(segment="FNO")  # later operations renew the session...
+
+    assert groww.orders_sent == ["session-1"]  # ...but the failed order is never re-sent
+
+
+def test_fno_live_order_is_not_sent_when_no_session_can_be_obtained(groww, monkeypatch) -> None:
+    from fno_signals.broker import GrowwSessionUnavailableError, execute_market_order
+
+    client = fno_live_session(monkeypatch)
+    groww.expired.add("session-1")
+    with pytest.raises(GrowwAPIAuthenticationException):
+        client.get_positions_for_user(segment="FNO")
+    groww.mint_error = GrowwAPIException(code="400", msg="Groww API Error 400: approval pending")
+    groww.orders_sent.clear()
+
+    # A GrowwAPIException, so the live flow's existing handler marks the
+    # order failed exactly as for any other failed Groww call.
+    with pytest.raises(GrowwAPIException) as raised:
+        execute_market_order(client, resolved_contract(), quantity=75)
+
+    assert isinstance(raised.value, GrowwSessionUnavailableError)
+    assert "approval pending" in str(raised.value)
+    assert groww.orders_sent == []
+
+
+# -- fix 2: manual order / GrowwBroker.execute renew before gating ------------
+
+
+def live_broker(service: TokenService):
+    from algoedge.groww_broker import GrowwBroker
+
+    return GrowwBroker(settings=make_settings(live_trading=True), token_service=service)
+
+
+def test_broker_execute_renews_an_expired_session_then_places_once(groww) -> None:
+    service = key_secret_service()
+    expire_current_session(service, groww)
+    assert service.is_connected() is False  # the stale status that used to reject the order
+
+    live_broker(service).execute("buy", price=100.0)
+
+    assert groww.orders_sent == ["session-2"]
+
+
+def test_broker_execute_is_blocked_by_a_genuine_authentication_failure(groww) -> None:
+    service = key_secret_service()
+    expire_current_session(service, groww)
+    groww.mint_error = GrowwAPIAuthenticationException()
+
+    with pytest.raises(BrokerNotConnectedError):
+        live_broker(service).execute("buy", price=100.0)
+
+    assert groww.orders_sent == []
+
+
+def test_broker_execute_still_blocks_on_a_transient_error(groww) -> None:
+    from growwapi.groww.exceptions import GrowwAPITimeoutException
+
+    service = key_secret_service()
+    service._client.get_positions_for_user = lambda segment=None: (_ for _ in ()).throw(GrowwAPITimeoutException())
+    with pytest.raises(GrowwAPITimeoutException):
+        service.effective_client().get_positions_for_user()
+
+    with pytest.raises(BrokerNotConnectedError):
+        live_broker(service).execute("buy", price=100.0)
+    assert groww.orders_sent == []
+
+
+class _PassedConnectionGate(Exception):
+    pass
+
+
+@pytest.fixture
+def manual_order_endpoint(monkeypatch):
+    """Runs the real endpoint up to its connection gate: reaching the next
+    step (the reconciliation check) raises _PassedConnectionGate."""
+    monkeypatch.setattr(web_server.settings, "live_trading", True)
+
+    def reached_next_step():
+        raise _PassedConnectionGate
+
+    monkeypatch.setattr(web_server, "_run_reconciliation_check", reached_next_step)
+
+    def place():
+        return web_server.manual_trading_place_order(index_id="nifty-50", expiry="2026-09-29", strike=23200, right="PE")
+
+    return place
+
+
+def test_manual_order_renews_an_expired_session_instead_of_rejecting(groww, monkeypatch, manual_order_endpoint) -> None:
+    service = key_secret_service()
+    monkeypatch.setattr(web_server, "token_service", service)
+    expire_current_session(service, groww)
+
+    with pytest.raises(_PassedConnectionGate):
+        manual_order_endpoint()
+    assert service.current_connection_status() == "CONNECTED"
+    assert groww.minted == ["session-1", "session-2"]
+
+
+def test_manual_order_is_blocked_by_a_genuine_authentication_failure(groww, monkeypatch, manual_order_endpoint) -> None:
+    from fastapi import HTTPException
+
+    service = key_secret_service()
+    monkeypatch.setattr(web_server, "token_service", service)
+    expire_current_session(service, groww)
+    groww.mint_error = GrowwAPIAuthenticationException()
+
+    with pytest.raises(HTTPException) as raised:
+        manual_order_endpoint()
+
+    assert raised.value.status_code == 503
+    assert groww.orders_sent == []
+
+
+# -- fix 3: RENEWAL_DUE vs a real expiry --------------------------------------
+
+
+def test_past_estimated_reset_with_a_working_session_is_renewal_due(groww, monkeypatch) -> None:
+    service = key_secret_service()
+    monkeypatch.setattr(web_server, "token_service", service)
+    groww.mint_error = GrowwAPIException(code="400", msg="approval pending")
+    service._token_expiry_at = datetime.now(IST) - timedelta(minutes=5)
+    service.effective_client()  # renewal attempted and failed; the session still works
+
+    payload = web_server.broker_status()
+    assert payload["connectionStatus"] == "CONNECTED"
+    assert payload["sessionStatus"] == "RENEWAL_DUE"
+    assert web_server.system_health()["broker"]["status"] == "CONNECTED"
+
+    # Only a real authentication failure makes it expired.
+    expire_current_session(service, groww)
+    payload = web_server.broker_status()
+    assert payload["connectionStatus"] == "TOKEN_EXPIRED"
+    assert payload["sessionStatus"] == "EXPIRED"

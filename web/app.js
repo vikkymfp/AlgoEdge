@@ -1734,7 +1734,9 @@ function brokerConnectionTagClass(connectionStatus) {
   return 'danger';
 }
 
-const TOKEN_STATUS_CLASS = { ACTIVE: 'positive', EXPIRING_SOON: 'warning', EXPIRED: 'warning', INVALID: 'warning', UNAVAILABLE: '' };
+const TOKEN_STATUS_CLASS = {
+  ACTIVE: 'positive', EXPIRING_SOON: 'warning', RENEWAL_DUE: 'warning', EXPIRED: 'warning', INVALID: 'warning', UNAVAILABLE: '',
+};
 
 // Groww doesn't publish a real expiry timestamp (see token_service.py's
 // _estimate_token_expiry) - this is always an estimate based on the known
@@ -1748,7 +1750,10 @@ function formatTimeRemaining(expiryAtIso) {
   const diffMs = target - Date.now();
   if (diffMs <= 0) {
     const overdueMinutes = Math.round(-diffMs / 60000);
-    return overdueMinutes < 60 ? `Expired ${overdueMinutes}m ago` : `Expired ${Math.round(overdueMinutes / 60)}h ago`;
+    // Only the ESTIMATED reset has passed - whether the session actually
+    // expired is sessionStatus's call (EXPIRED only after a real 401).
+    const ago = overdueMinutes < 60 ? `${overdueMinutes}m` : `${Math.round(overdueMinutes / 60)}h`;
+    return `Estimated reset passed ${ago} ago`;
   }
   const totalMinutes = Math.round(diffMs / 60000);
   const hours = Math.floor(totalMinutes / 60);
@@ -1777,7 +1782,7 @@ function renderBrokerStatus(status) {
   connectionTag.className = `status-tag ${brokerConnectionTagClass(status.connectionStatus)}`;
 
   const tokenStatusEl = document.querySelector('#brokerTokenStatus');
-  tokenStatusEl.textContent = status.sessionStatus;
+  tokenStatusEl.textContent = (status.sessionStatus || '—').replace(/_/g, ' ');
   tokenStatusEl.className = TOKEN_STATUS_CLASS[status.sessionStatus] || '';
 
   document.querySelector('#brokerTokenCreatedAt').textContent = formatTimestamp(status.sessionCreatedAt);
@@ -1792,7 +1797,7 @@ function renderBrokerStatus(status) {
   const remaining = status.sessionStatus === 'UNAVAILABLE' ? null : formatTimeRemaining(status.sessionExpiresAt);
   const remainingEl = document.querySelector('#brokerTokenTimeRemaining');
   remainingEl.textContent = remaining || '—';
-  remainingEl.className = remaining && remaining.startsWith('Expired') ? 'warning' : '';
+  remainingEl.className = remaining && remaining.startsWith('Estimated reset passed') ? 'warning' : '';
 
   document.querySelector('#brokerLastValidatedAt').textContent = formatTimestamp(status.lastValidatedAt);
   document.querySelector('#brokerLastSuccessAt').textContent = formatTimestamp(status.lastSuccessfulRequestAt);

@@ -160,4 +160,26 @@ test.describe('API Management action result vs current connection state', () => 
     await expect(page.locator('#brokerAuthMode')).toHaveText('Pasted session token — not renewed automatically');
     await expect(page.locator('#brokerReauthButton')).toBeHidden();
   });
+
+  test('a working session past the estimated reset shows RENEWAL DUE, not expired or disconnected', async ({ page }) => {
+    const renewalDue = {
+      ...CONNECTED, sessionStatus: 'RENEWAL_DUE',
+      sessionExpiresAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+    };
+    const state = await mockBroker(page, renewalDue);
+    await page.goto('/');
+    await page.click('a[href="#broker-panel"]');
+
+    await expect(page.locator('#brokerConnectionTag')).toHaveText('CONNECTED');
+    await expect(page.locator('#brokerTokenStatus')).toHaveText('RENEWAL DUE');
+    await expect(page.locator('#brokerStatusPill')).toHaveText('Groww Connected');
+    await expect(page.locator('#brokerTokenTimeRemaining')).toHaveText(/^Estimated reset passed \d+m ago$/);
+    await expect(page.locator('#broker-panel')).not.toContainText('Session Expired');
+
+    // Only an actual authentication failure turns it into an expiry.
+    state.status = EXPIRED;
+    await refreshStatus(page);
+    await expect(page.locator('#brokerStatusPill')).toHaveText('Session Expired');
+    await expect(page.locator('#brokerTokenStatus')).toHaveText('EXPIRED');
+  });
 });

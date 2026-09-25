@@ -175,7 +175,11 @@ class BrokerStatus:
     api_secret_masked: str | None
     # Describes the current authenticated SESSION (the generated access
     # token), never the API key/secret themselves, which don't expire daily.
-    token_status: str  # ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE
+    # ACTIVE | EXPIRING_SOON | RENEWAL_DUE | EXPIRED | INVALID | UNAVAILABLE.
+    # EXPIRED/INVALID only ever come from a real authentication failure;
+    # RENEWAL_DUE means the estimated daily reset has passed but the
+    # session is still actually working (renewal pending or failed).
+    token_status: str
     connection_status: str  # CONNECTED | TOKEN_EXPIRED | TOKEN_INVALID | DISCONNECTED | MISSING | ERROR
     token_created_at: datetime | None
     token_expiry_at: datetime | None
@@ -474,10 +478,11 @@ class TokenService:
                 self._persist()
 
     def _compute_token_status(self) -> str:
-        """ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE - always
-        derived from connection_status (real evidence) first. The estimated
-        daily-reset clock only ever adds an early EXPIRING_SOON/EXPIRED
-        warning on top of an otherwise-CONNECTED state; it never overrides
+        """ACTIVE | EXPIRING_SOON | RENEWAL_DUE | EXPIRED | INVALID |
+        UNAVAILABLE - always derived from connection_status (real evidence)
+        first. The estimated daily-reset clock only ever adds an
+        EXPIRING_SOON/RENEWAL_DUE note on top of an otherwise-CONNECTED
+        state - never EXPIRED, which needs a real authentication failure; it never overrides
         connection_status itself (see the module docstring on
         _estimate_token_expiry) - the next real call self-corrects it
         either way, typically within seconds given how often this app
@@ -500,7 +505,10 @@ class TokenService:
         if self._token_expiry_at is not None:
             remaining_seconds = (self._token_expiry_at - datetime.now(IST)).total_seconds()
             if remaining_seconds <= 0:
-                return "EXPIRED"
+                # Only an estimate has passed - the session is still
+                # working (connection_status is CONNECTED), so it is due
+                # for renewal, not expired.
+                return "RENEWAL_DUE"
             if remaining_seconds <= _EXPIRING_SOON_WINDOW_MINUTES * 60:
                 return "EXPIRING_SOON"
         return "ACTIVE"
