@@ -213,3 +213,47 @@ def test_null_benchmark_path_is_unchanged(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(historical_db, "research_engine", lambda *a, **k: pytest.fail("engine created"))
     assert run_mod.main(["--null", "1", "--out", str(tmp_path)]) == 0
     assert (tmp_path / "null_benchmark_5m.md").read_text().startswith("# Null benchmark - 1 random walks")
+
+
+# ---------------- --start / --end date semantics ----------------
+
+
+def test_date_only_start_is_the_start_of_that_day(research_db, spies, tmp_path) -> None:
+    _frames, run_index_frames, reader_calls = spies
+    assert run_db(tmp_path, "--start", "2015-11-17") == 0
+    assert reader_calls[0]["start"] == pd.Timestamp("2015-11-17 00:00:00")
+    [segment] = run_index_frames
+    assert segment.index[0].isoformat() == "2015-11-17T09:15:00+05:30"  # the whole of the 17th is included
+    assert len(segment) == 9 * 75  # 17th .. 27th
+
+
+def test_date_only_end_includes_the_whole_day(research_db, spies, tmp_path) -> None:
+    _frames, run_index_frames, reader_calls = spies
+    assert run_db(tmp_path, "--start", "2015-11-16", "--end", "2015-11-20") == 0
+    assert reader_calls[0]["end"] == pd.Timestamp("2015-11-20 23:59:59")
+    [segment] = run_index_frames
+    assert segment.index[-1].isoformat() == "2015-11-20T15:25:00+05:30"  # through the last bar of the day
+    assert len(segment) == 5 * 75
+
+
+@pytest.mark.parametrize("end, last_bar, bars", [
+    ("2015-11-20 12:00", "2015-11-20T12:00:00+05:30", 4 * 75 + 34),  # inclusive at the exact bar
+    ("2015-11-20T00:00", "2015-11-19T15:25:00+05:30", 4 * 75),  # explicit midnight stays midnight
+    ("2015-11-20 15:25", "2015-11-20T15:25:00+05:30", 5 * 75),
+])
+def test_explicit_datetime_end_is_exact(research_db, spies, tmp_path, end, last_bar, bars) -> None:
+    _frames, run_index_frames, reader_calls = spies
+    assert run_db(tmp_path, "--start", "2015-11-16", "--end", end) == 0
+    assert reader_calls[0]["end"] == pd.Timestamp(end)
+    [segment] = run_index_frames
+    assert segment.index[-1].isoformat() == last_bar
+    assert len(segment) == bars
+
+
+def test_parse_end_unit() -> None:
+    assert run_mod._parse_end("2015-12-31") == pd.Timestamp("2015-12-31 23:59:59")
+    assert run_mod._parse_end(" 2015-12-31 ") == pd.Timestamp("2015-12-31 23:59:59")
+    assert run_mod._parse_end("2015-12-31 15:25") == pd.Timestamp("2015-12-31 15:25")
+    assert run_mod._parse_end("2015-12-31T00:00:00") == pd.Timestamp("2015-12-31 00:00")
+    aware = run_mod._parse_end("2015-12-31T09:55:00Z")  # explicit, timezone-aware: kept exactly
+    assert aware == pd.Timestamp("2015-12-31 09:55", tz="UTC")

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -282,6 +283,19 @@ def _jsonable(obj):
     return obj
 
 
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _parse_end(value: str) -> pd.Timestamp:
+    """--end: a bare YYYY-MM-DD covers that entire IST day (bar_start <= 23:59:59 -
+    whole seconds, because SQL Server DATETIME rounds 23:59:59.999... up to the
+    next midnight); anything with a time component is kept exactly."""
+    ts = pd.Timestamp(value)
+    if _DATE_ONLY.fullmatch(value.strip()):
+        return ts + pd.Timedelta(hours=23, minutes=59, seconds=59)
+    return ts
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval", default="5m", choices=list(data_mod.BACKTEST_TIMEFRAMES))
@@ -300,9 +314,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db-source", default="master_5min.csv",
                         help="historical_candles.source to read with --db (default: master_5min.csv)")
     parser.add_argument("--start", type=pd.Timestamp, default=None,
-                        help="with --db: first bar_start to read (inclusive, IST)")
-    parser.add_argument("--end", type=pd.Timestamp, default=None,
-                        help="with --db: last bar_start to read (inclusive, IST)")
+                        help="with --db: first bar_start to read (inclusive, IST); YYYY-MM-DD = start of that day")
+    parser.add_argument("--end", type=_parse_end, default=None,
+                        help="with --db: last bar_start to read (inclusive, IST); YYYY-MM-DD = the whole day, "
+                             "an explicit date-time is used exactly")
     args = parser.parse_args(argv)
 
     if args.db:
