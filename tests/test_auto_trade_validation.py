@@ -155,8 +155,9 @@ def test_call_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> 
     assert order_manager.account.quantity == 0
     assert order_manager.account.side is None
     # Paper P&L reconciliation: realized P&L must equal (exit - entry) * qty
-    # for a CALL, exactly - not approximately-plausible.
-    expected_pnl = (exit_result.event.underlying_price - entry_price) * 1
+    # for a CALL, exactly - not approximately-plausible. The exit fills at
+    # the target level itself (exit_level), like the canonical backtest.
+    expected_pnl = (exit_result.event.exit_level - entry_price) * 1
     assert exit_result.order.realized_pnl == pytest.approx(expected_pnl)
 
 
@@ -180,8 +181,9 @@ def test_put_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> N
 
     assert exit_result.event.kind == "EXIT_TARGET"
     assert order_manager.account.quantity == 0
-    # PUT P&L reconciliation: (entry - exit) * qty, the mirror of CALL.
-    expected_pnl = (entry_price - exit_result.event.underlying_price) * 2
+    # PUT P&L reconciliation: (entry - exit) * qty, the mirror of CALL,
+    # with the exit at the target level (exit_level).
+    expected_pnl = (entry_price - exit_result.event.exit_level) * 2
     assert exit_result.order.realized_pnl == pytest.approx(expected_pnl)
 
 
@@ -405,7 +407,10 @@ def test_entry_blocked_before_trading_session_start(monkeypatch) -> None:
 
 
 def test_entry_blocked_after_trading_session_end(monkeypatch) -> None:
-    patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
+    # Same uptrend, shifted so its entry bar (index 16) is 15:35 - still a
+    # FRESH signal at 15:45 (bar closed 15:40), so the trading-hours gate is
+    # what refuses it, not the signal-freshness rule.
+    patch_fetch(monkeypatch, trending_df(60, start_price=100.0, step=2.0, start="2026-09-23 14:15").iloc[:17])
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
@@ -422,8 +427,10 @@ def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch)
     risk_manager.enable_auto_trading()
     past_cutoff = datetime(2026, 9, 23, 15, 10, tzinfo=IST)  # entry_cutoff=15:00, trading_end=15:30
 
-    # A fresh entry (flat account) must be refused past the cutoff.
-    patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
+    # A fresh entry (flat account) must be refused past the cutoff. The
+    # uptrend is shifted so its entry bar is 15:00 (closed 15:05) - fresh
+    # at 15:10, so the entry-cutoff gate is what refuses it.
+    patch_fetch(monkeypatch, trending_df(60, start_price=100.0, step=2.0, start="2026-09-23 13:40").iloc[:17])
     flat_order_manager = OrderManager()
     entry_attempt = _run_cycle(
         "nifty-50", "5m", risk_manager, flat_order_manager, quantity=1, now=past_cutoff
@@ -434,13 +441,16 @@ def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch)
     # ...but exiting a position entered before the cutoff (its entry
     # already marked as processed via last_event_at, exactly as a real
     # earlier run_cycle() call would have left it) must still go through.
-    entry_timestamp = UPTREND_60.index[16]
+    # Shifted so the target exit bar is 15:10 (closed 15:15): past the
+    # entry cutoff, inside trading hours, and fresh at 15:16.
+    late_uptrend = trending_df(60, start_price=100.0, step=2.0, start="2026-09-23 13:10")
+    entry_timestamp = late_uptrend.index[16]
     held_account = SimulatedAccount(quantity=1, average_price=120.0, side="CALL", last_event_at=entry_timestamp)
     held_order_manager = OrderManager(held_account)
-    patch_fetch(monkeypatch, UPTREND_60)
+    patch_fetch(monkeypatch, late_uptrend)
     exit_attempt = _run_cycle(
         "nifty-50", "5m", risk_manager, held_order_manager, quantity=1,
-        now=past_cutoff + timedelta(minutes=1), total_open_positions=1,
+        now=datetime(2026, 9, 23, 15, 16, tzinfo=IST), total_open_positions=1,
     )
     assert exit_attempt.event.kind in ("EXIT_TARGET", "EXIT_SL")
     assert exit_attempt.order.status == "PLACED"

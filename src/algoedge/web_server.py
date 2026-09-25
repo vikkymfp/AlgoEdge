@@ -449,7 +449,10 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
             side="SELL" if is_exit else "BUY", right=event.right, strike=event.strike,
             trading_symbol=resolved_contract.trading_symbol if resolved_contract else None,
             expiry_date=resolved_contract.expiry if resolved_contract else None,
-            order_type="MARKET", quantity=quantity, price=event.underlying_price,
+            order_type="MARKET", quantity=quantity,
+            # The simulated fill (an exit fills at its SL/target level, not the
+            # bar close); falls back to the signal price for a FAILED order.
+            price=result.order.fill_price if result.order.fill_price is not None else event.underlying_price,
             outcome=result.order.status, reason=result.order.detail,
             realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,
         )

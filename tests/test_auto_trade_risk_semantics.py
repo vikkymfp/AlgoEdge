@@ -178,8 +178,9 @@ def test_normal_exit_still_fills_after_the_daily_loss_limit_is_breached(monkeypa
     assert exit_result.risk.allowed is True
     assert exit_result.order.status == "PLACED"
     assert order_manager.account.quantity == 0
-    # Paper P&L model itself is unchanged: underlying points x quantity.
-    assert exit_result.order.realized_pnl == pytest.approx(exit_result.event.underlying_price - entry_price)
+    # Paper P&L model itself is unchanged: underlying points x quantity,
+    # exiting at the target level (exit_level), like the canonical backtest.
+    assert exit_result.order.realized_pnl == pytest.approx(exit_result.event.exit_level - entry_price)
 
 
 # ---------- max trades per day ----------

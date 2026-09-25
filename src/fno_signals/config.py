@@ -52,6 +52,18 @@ class SessionConfig:
     Entries are restricted to this window. Open trades are NEVER force-closed
     at session end — they carry over to subsequent days and exit only on
     their own stop loss or target (delivery / carry-forward style).
+
+    Position/session semantics of the STRATEGY (what the Backtest measures):
+    - `start`/`end` gate NEW entries only; there is no session exit.
+    - An open position may be held overnight and across days; it exits only
+      on its own SL or target (fno_signals.strategy.run() never force-closes).
+
+    Paper Auto Trade is different by design: it applies its own execution
+    controls on top - a 15:00 entry cutoff and a forced 15:20 square-off
+    (algoedge.risk_manager.RiskLimits) - so paper never holds overnight.
+    After a square-off, paper re-evaluates the strategy from the account's
+    real (flat) position (algoedge.auto_trader position sync), so the
+    strategy does not keep a phantom overnight position in paper.
     """
 
     start: time = time(9, 15)
