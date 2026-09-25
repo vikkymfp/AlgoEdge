@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import threading
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
 import requests
 from growwapi import GrowwAPI
-from growwapi.groww.exceptions import GrowwAPIAuthenticationException, GrowwAPIException
+from growwapi.groww.exceptions import (
+    GrowwAPIAuthenticationException,
+    GrowwAPIAuthorisationException,
+    GrowwAPIException,
+    GrowwAPINotFoundException,
+)
 
 from algoedge import credential_manager, db
 from algoedge.config import Settings
@@ -43,6 +49,83 @@ BROKER_NAME = "groww"
 # directly and isn't wrapped in GrowwAPIException on connection failures.
 _GROWW_CALL_ERRORS = (GrowwAPIException, requests.RequestException, OSError, TypeError, ValueError, KeyError)
 
+# How a failed Groww call is classified - see classify_failure().
+FAILURE_AUTH = "AUTH"  # the token/session itself is bad -> broker-level
+FAILURE_CAPABILITY = "CAPABILITY"  # this endpoint/feature isn't permitted -> endpoint-level only
+FAILURE_TRANSIENT = "TRANSIENT"  # timeout/network/5xx/unexpected -> broker ERROR, client kept
+
+# Groww reports some failures as a 200 with {"status": "FAILURE"} and its own
+# error code, so the HTTP status is lost and only the message is left to go
+# on. Auth markers are checked FIRST: anything that could mean the token or
+# session is bad is always treated as an auth failure (the safe side).
+_AUTH_MESSAGE_MARKERS = (
+    "unauthori", "authenticat", "token expired", "expired token", "invalid token",
+    "token is invalid", "token invalid", "session expired", "session invalid", "invalid session", "login",
+)
+_CAPABILITY_MESSAGE_MARKERS = (
+    "forbidden", "not permitted", "permission", "not subscribed", "not enabled", "not allowed",
+    "not supported", "unsupported",
+)
+
+# Groww client methods grouped into the capabilities Diagnostics reports on.
+# A method not listed here is tracked under its own name.
+_ENDPOINT_CAPABILITIES = {
+    "get_user_profile": "profile",
+    "get_available_margin_details": "margin",
+    "get_holdings_for_user": "holdings",
+    "get_positions_for_user": "positions",
+    "get_position_for_trading_symbol": "positions",
+    "get_order_list": "orders",
+    "get_order_status": "orders",
+    "get_order_status_by_reference": "orders",
+    "get_order_detail": "orders",
+    "get_trade_list_for_order": "orders",
+    "place_order": "order_placement",
+    "modify_order": "order_placement",
+    "cancel_order": "order_placement",
+    "get_quote": "market_data",
+    "get_ltp": "market_data",
+    "get_ohlc": "market_data",
+    "get_historical_candle_data": "market_data",
+    "get_historical_candles": "market_data",
+    "get_greeks": "market_data",
+    "get_option_chain": "market_data",
+    "get_expiries": "market_data",
+    "get_contracts": "market_data",
+    "get_all_instruments": "instrument_master",
+    "get_instrument_by_groww_symbol": "instrument_master",
+    "get_instrument_by_exchange_and_trading_symbol": "instrument_master",
+    "get_instrument_by_exchange_token": "instrument_master",
+}
+
+
+def capability_for(endpoint: str | None) -> str | None:
+    if endpoint is None:
+        return None
+    return _ENDPOINT_CAPABILITIES.get(endpoint, endpoint)
+
+
+def classify_failure(error: Exception) -> str:
+    """AUTH only for a genuinely bad token/session (401, or a Groww
+    FAILURE message that says so); CAPABILITY for a 403/404 or a message
+    saying this specific endpoint/feature isn't permitted; everything
+    else (timeouts, network, rate limits, 5xx, unexpected shapes) is
+    TRANSIENT. Auth is checked before capability, so an ambiguous message
+    never downgrades a real auth failure to endpoint-level."""
+    if isinstance(error, GrowwAPIAuthenticationException):
+        return FAILURE_AUTH
+    if not isinstance(error, GrowwAPIException):
+        return FAILURE_TRANSIENT
+    code = str(getattr(error, "code", "") or "")
+    message = (getattr(error, "msg", None) or str(error)).lower()
+    if code == "401" or any(marker in message for marker in _AUTH_MESSAGE_MARKERS):
+        return FAILURE_AUTH
+    if isinstance(error, (GrowwAPIAuthorisationException, GrowwAPINotFoundException)) or code in {"403", "404"}:
+        return FAILURE_CAPABILITY
+    if any(marker in message for marker in _CAPABILITY_MESSAGE_MARKERS):
+        return FAILURE_CAPABILITY
+    return FAILURE_TRANSIENT
+
 
 class BrokerNotConnectedError(RuntimeError):
     """Raised when trading/broker-data code asks for a client but no
@@ -71,6 +154,11 @@ class BrokerStatus:
     last_successful_request_at: datetime | None
     last_error: str | None
     credentials_persisted: bool
+    # Endpoint-level availability, e.g. {"market_data": {"status":
+    # "UNAVAILABLE", "error": "...", "checkedAt": ...}}. Only capabilities
+    # actually exercised since the last (re)connection appear here; none of
+    # them ever changes connection_status on its own.
+    capabilities: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -107,9 +195,9 @@ class _TrackedClient:
             try:
                 result = attribute(*args, **kwargs)
             except _GROWW_CALL_ERRORS as error:
-                self._on_failure(error)
+                self._on_failure(error, endpoint=name)
                 raise
-            self._on_success()
+            self._on_success(endpoint=name)
             return result
 
         return _tracked
@@ -149,6 +237,10 @@ class TokenService:
         self._connection_status = "MISSING"
         self._last_error: str | None = None
         self._client: GrowwAPI | None = None
+        self._capabilities: dict[str, dict[str, Any]] = {}
+        # _TrackedClient callbacks can arrive concurrently (e.g.
+        # account_snapshot's thread pool) - transitions happen under this.
+        self._state_lock = threading.RLock()
         # Whether the most recent successful update_access_token()/
         # update_credentials() call actually stored the new secrets
         # (encrypted) in the database. None until an update succeeds. Says
@@ -203,37 +295,70 @@ class TokenService:
             )
         return _TrackedClient(self._client, self.mark_successful_request, self.mark_failed_request)  # type: ignore[return-value]
 
-    def mark_successful_request(self) -> None:
-        """Called by broker-facing code after any real Groww API call
-        succeeds, so "Last Successful API Request" reflects actual usage,
-        not just explicit Test Connection clicks. In-memory only - not
-        persisted on every call, to avoid hammering the database for pure
-        observability."""
-        self._last_successful_request_at = datetime.now(IST)
+    def mark_successful_request(self, endpoint: str | None = None) -> None:
+        """Called by _TrackedClient after any real Groww API call succeeds.
+        Marks that endpoint's capability AVAILABLE, and - because a real
+        authenticated call just worked - restores CONNECTED from a
+        transient ERROR. Never revives a TOKEN_EXPIRED/TOKEN_INVALID
+        connection: an auth failure discards the client, so no tracked call
+        can succeed until a new token is validated."""
+        with self._state_lock:
+            now = datetime.now(IST)
+            self._last_successful_request_at = now
+            capability = capability_for(endpoint)
+            if capability is not None:
+                self._capabilities[capability] = {"status": "AVAILABLE", "error": None, "checkedAt": now}
+            if self._connection_status == "ERROR" and self._client is not None:
+                self._connection_status = "CONNECTED"
+                self._last_error = None
+                self._record_event("CONNECTION_RESTORED", status="SUCCESS")
+                self._persist()
 
-    def mark_failed_request(self, error: Exception) -> None:
+    def mark_failed_request(self, error: Exception, endpoint: str | None = None) -> None:
         """Called by _TrackedClient after ANY real Groww call made anywhere
-        in the app fails - this is what keeps connection_status genuinely
-        live instead of a stale CONNECTED left over from whenever the
-        connection was last explicitly tested. An auth-specific failure
-        means the token itself is now confirmed bad (expired if it was
+        in the app fails - see classify_failure() for the three outcomes.
+
+        AUTH: the token itself is now confirmed bad (expired if it was
         previously validated at least once, invalid if it never was) and
         the client is discarded so no further call can be attempted against
-        a token already known to be dead. A non-auth failure (timeout,
-        network error, unexpected response) doesn't indict the token
-        itself, so the client is kept - a transient blip shouldn't force a
-        real reconnect. Only writes to the DB/audit log on an actual status
-        transition, not on every repeated failure while already broken."""
-        previous_status = self._connection_status
-        self._last_error = self._safe_message(error)
-        if isinstance(error, GrowwAPIAuthenticationException):
-            self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
-            self._client = None
-        else:
-            self._connection_status = "ERROR"
-        if self._connection_status != previous_status:
-            self._record_event("CONNECTION_LOST", status="FAILED", error_message=self._last_error)
-            self._persist()
+        a token already known to be dead.
+
+        CAPABILITY (e.g. a 403 on market data the account isn't subscribed
+        to): only that capability is marked UNAVAILABLE. The session is
+        still authenticated, so connection_status is left as it is.
+
+        TRANSIENT (timeout, network error, unexpected response): the broker
+        is marked ERROR but the client is kept - a blip shouldn't force a
+        real reconnect, and the next successful call restores CONNECTED.
+
+        Only writes to the DB/audit log on an actual transition, not on
+        every repeated failure while already broken."""
+        with self._state_lock:
+            message = self._safe_message(error)
+            kind = classify_failure(error)
+            if kind == FAILURE_CAPABILITY:
+                capability = capability_for(endpoint) or "unknown"
+                previous = self._capabilities.get(capability, {}).get("status")
+                self._capabilities[capability] = {
+                    "status": "UNAVAILABLE", "error": message, "checkedAt": datetime.now(IST),
+                }
+                if previous != "UNAVAILABLE":
+                    self._record_event(
+                        "CAPABILITY_UNAVAILABLE", status="FAILED", error_message=f"{capability}: {message}"[:255],
+                    )
+                return
+
+            previous_status = self._connection_status
+            self._last_error = message
+            if kind == FAILURE_AUTH:
+                self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
+                self._client = None
+                self._capabilities = {}
+            else:
+                self._connection_status = "ERROR"
+            if self._connection_status != previous_status:
+                self._record_event("CONNECTION_LOST", status="FAILED", error_message=self._last_error)
+                self._persist()
 
     def _compute_token_status(self) -> str:
         """ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE - always
@@ -283,7 +408,14 @@ class TokenService:
             last_error=self._last_error,
             credentials_persisted=credential_manager.is_configured(self._settings.credential_encryption_key)
             and db.is_available(),
+            capabilities={name: dict(value) for name, value in self._capabilities.items()},
         )
+
+    def capability_status(self, capability: str) -> dict[str, Any] | None:
+        """This capability's last observed availability, or None if it
+        hasn't been exercised since the last (re)connection."""
+        value = self._capabilities.get(capability)
+        return dict(value) if value is not None else None
 
     # -- activation ------------------------------------------------------
 
@@ -299,6 +431,9 @@ class TokenService:
         self._client = client
         self._access_token = access_token
         now = datetime.now(IST)
+        # A newly validated token may carry different permissions - start
+        # its capability map fresh from what this probe just proved.
+        self._capabilities = {"profile": {"status": "AVAILABLE", "error": None, "checkedAt": now}}
         self._connection_status = "CONNECTED"
         self._last_validated_at = now
         self._last_successful_request_at = now
@@ -371,7 +506,7 @@ class TokenService:
         existing good connection marked CONNECTED."""
         message = self._safe_message(error)
         if self._client is None:
-            if isinstance(error, GrowwAPIAuthenticationException):
+            if classify_failure(error) == FAILURE_AUTH:
                 self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
             else:
                 self._connection_status = "ERROR"
@@ -451,7 +586,7 @@ class TokenService:
                 raise TypeError("Unexpected response validating the Groww connection.")
         except _GROWW_CALL_ERRORS as error:
             message = self._safe_message(error)
-            if isinstance(error, GrowwAPIAuthenticationException):
+            if classify_failure(error) == FAILURE_AUTH:
                 self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
                 self._client = None
             else:
@@ -465,6 +600,7 @@ class TokenService:
         self._last_validated_at = now
         self._last_successful_request_at = now
         self._last_error = None
+        self._capabilities["profile"] = {"status": "AVAILABLE", "error": None, "checkedAt": now}
         self._record_event("VALIDATION_SUCCESS", status="SUCCESS")
         self._persist()
         return ConnectionTestResult(True, "Connected")
@@ -493,7 +629,7 @@ class TokenService:
                 self._last_error = self._safe_message(error)
                 self._connection_status = (
                     ("TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID")
-                    if isinstance(error, GrowwAPIAuthenticationException) else "ERROR"
+                    if classify_failure(error) == FAILURE_AUTH else "ERROR"
                 )
         if self._api_key and self._api_secret:
             try:

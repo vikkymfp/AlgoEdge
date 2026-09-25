@@ -236,10 +236,13 @@ function renderAccount(account, fetchSucceeded = true) {
       `${failedChecks.map(([label]) => label).join(', ')} unavailable${firstError ? ` — ${firstError}` : ''}`);
   }
 
-  if (marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE') {
-    renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE', 'Requires Groww’s paid Live Data API (get_ltp / get_quote / get_ohlc)');
-  } else if (marketData.status) {
+  // Endpoint-level: a market data 403 marks only this card unavailable and
+  // never changes the broker connection card above.
+  if (marketData.status === 'AVAILABLE') {
     renderDiagnosticCard('diagMarketData', 'ok', 'CONNECTED', 'Live quotes available');
+  } else if (marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE') {
+    renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE',
+      marketData.error ? `Market data unavailable — ${marketData.error}` : 'Requires Groww’s paid Live Data API (get_ltp / get_quote / get_ohlc)');
   } else {
     renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE', 'Status unknown');
   }
@@ -290,12 +293,10 @@ function renderAccount(account, fetchSucceeded = true) {
     : capabilityUnavailableHtml(ordersStatus.error ? `Orders unavailable: ${ordersStatus.error}` : 'Orders are currently unavailable.');
 
   // ---- Instrument Master & Market Data (combined section) ----
-  // Market data is a documented tier restriction, not a live-checked toggle
-  // (see marketData.status above) - it is never "Available", so this
-  // section's own tag can only ever be Available (instrument master ok) or
-  // Partial (instrument master ok, market data isn't), never claiming both
-  // sub-capabilities work when one of them structurally can't.
-  const marketDataAvailable = marketData.status !== 'PERMISSION_DENIED_OR_UNAVAILABLE' && !!marketData.status;
+  // Market data is AVAILABLE only once a real market data call succeeded
+  // (see marketData.status above); denied or not yet exercised counts as
+  // unavailable, so this tag never claims both sub-capabilities work.
+  const marketDataAvailable = marketData.status === 'AVAILABLE';
   renderDiagnosticTag(
     'diagInstrumentTag',
     instrumentMaster.available && marketDataAvailable ? 'ok' : instrumentMaster.available ? 'warning' : 'danger',
@@ -310,11 +311,13 @@ function renderAccount(account, fetchSucceeded = true) {
     </div>
     <div class="api-subsection">
       <h4>Market data</h4>
-      ${capabilityUnavailableHtml(
-        marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE'
-          ? `Live quotes unavailable: this account's Groww tier does not include the paid Live Data API. Affected methods: ${(marketData.availableMethods || []).join(', ') || 'get_ltp, get_quote, get_ohlc'}.`
-          : 'Market data status unknown.',
-      )}
+      ${marketDataAvailable
+        ? '<p>Live quotes available.</p>'
+        : capabilityUnavailableHtml(
+          marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE'
+            ? `Live quotes unavailable${marketData.error ? ` (${marketData.error})` : ''}: this account's Groww tier may not include the paid Live Data API. Affected methods: ${(marketData.availableMethods || []).join(', ') || 'get_ltp, get_quote, get_ohlc'}.`
+            : 'Market data status unknown.',
+        )}
     </div>`;
 }
 
@@ -1778,6 +1781,12 @@ function renderBrokerStatus(status) {
   document.querySelector('#brokerLastValidatedAt').textContent = formatTimestamp(status.lastValidatedAt);
   document.querySelector('#brokerLastSuccessAt').textContent = formatTimestamp(status.lastSuccessfulRequestAt);
   document.querySelector('#brokerLastError').textContent = status.lastError || 'None';
+  // Endpoint-level denials (e.g. market data 403) - listed here, never
+  // reflected in the connection status/pill above.
+  const unavailable = Object.entries(status.capabilities || {})
+    .filter(([, capability]) => capability.status === 'UNAVAILABLE')
+    .map(([name, capability]) => `${name.replace(/_/g, ' ')}${capability.error ? ` (${capability.error})` : ''}`);
+  document.querySelector('#brokerUnavailableCapabilities').textContent = unavailable.join('; ') || 'None';
   document.querySelector('#brokerPersisted').textContent = status.credentialsPersisted ? 'Yes (encrypted)' : 'No (in-memory only this session)';
 
   // This pill is the header's global "Groww Connected" indicator, driven

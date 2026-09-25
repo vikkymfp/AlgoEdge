@@ -128,10 +128,23 @@ class LiveGridService:
                     "tick_size", "freeze_quantity", "buy_allowed", "sell_allowed",
                 ],
             },
-            "marketData": {
-                "status": "PERMISSION_DENIED_OR_UNAVAILABLE",
-                "availableMethods": ["get_ltp", "get_quote", "get_ohlc"],
-            },
+            "marketData": self._market_data_status(),
+        }
+
+    def _market_data_status(self) -> dict[str, Any]:
+        """Market data (get_ltp/get_quote/get_ohlc) needs Groww's separate
+        Live Data permission. Reported from what TokenService actually
+        observed on those endpoints - AVAILABLE only after a real market
+        data call succeeded; otherwise (denied, or not yet exercised) it
+        stays PERMISSION_DENIED_OR_UNAVAILABLE. A denial here is endpoint-
+        level and never affects the broker connection itself."""
+        token_service = getattr(self.broker, "token_service", None)
+        observed = token_service.capability_status("market_data") if token_service is not None else None
+        available = observed is not None and observed["status"] == "AVAILABLE"
+        return {
+            "status": "AVAILABLE" if available else "PERMISSION_DENIED_OR_UNAVAILABLE",
+            "error": observed["error"] if observed is not None else None,
+            "availableMethods": ["get_ltp", "get_quote", "get_ohlc"],
         }
 
     @staticmethod

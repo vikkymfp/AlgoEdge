@@ -1033,6 +1033,10 @@ def _broker_status_payload() -> dict:
         "lastSuccessfulRequestAt": status.last_successful_request_at,
         "lastError": status.last_error,
         "credentialsPersisted": status.credentials_persisted,
+        # Endpoint-level availability (e.g. market data denied by a 403).
+        # Informational only - connectionStatus alone says whether the
+        # broker session is connected.
+        "capabilities": status.capabilities,
         # Manual/live trading requires an active Groww connection. Auto
         # Trading is deliberately paper-only (see auto_trader.py/README
         # notes) and never calls Groww to place an order, so a broken
@@ -1303,6 +1307,7 @@ def system_health() -> dict:
         },
         "broker": {
             "status": broker.connection_status,
+            "capabilities": broker.capabilities,
         },
         "reconciliation": {"status": reconciliation_status},
         "riskEngine": {"status": risk_status},

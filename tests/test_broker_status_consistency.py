@@ -5,7 +5,7 @@ Health) must read the one current state from TokenService."""
 
 import pytest
 from cryptography.fernet import Fernet
-from growwapi.groww.exceptions import GrowwAPIAuthenticationException, GrowwAPIException
+from growwapi.groww.exceptions import GrowwAPIAuthenticationException, GrowwAPITimeoutException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -95,18 +95,19 @@ def all_views_connection_status() -> set[str]:
 # -- successful token save followed by connection failure -----------------
 
 
-def test_token_save_then_forbidden_error_reports_error_not_connected(sqlite_db, web_service) -> None:
+def test_token_save_then_connection_failure_reports_error_not_connected(sqlite_db, web_service) -> None:
     payload = web_server.broker_update_access_token(web_server.AccessTokenUpdateRequest(accessToken="good-token"))
     assert payload["update"] == {"persisted": True}
     assert payload["connectionStatus"] == "CONNECTED"
 
-    # The user's reported state: a later real Groww call is refused 403.
-    fail_next_call(web_service, GrowwAPIException(code="403", msg="Access forbidden for this request"))
+    # A later real Groww call fails at the broker level (not an
+    # endpoint-only 403 - see test_endpoint_capabilities.py for that).
+    fail_next_call(web_service, GrowwAPITimeoutException())
 
     status = web_server.broker_status()
     assert status["connectionStatus"] == "ERROR"
     assert status["tokenStatus"] == "UNAVAILABLE"
-    assert status["lastError"] == "Access forbidden for this request"
+    assert status["lastError"] == GrowwAPITimeoutException().msg
     assert status["manualTradingBlocked"] is True
     assert all_views_connection_status() == {"ERROR"}
     # History still records that the update itself succeeded - that is
