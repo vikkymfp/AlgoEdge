@@ -117,3 +117,100 @@ def test_closing_a_position_clears_the_recorded_index() -> None:
     manager.place("SELL", price=110.0, quantity=10, index_id="nifty-50")
 
     assert account.index_id is None
+
+
+# ---------- fill_event() / place_event() - the CALL/PUT path used by the
+# canonical strategy (fno_signals.strategy.run()) via algoedge.auto_trader.
+# Distinct from the BUY/SELL fill()/place() path above, which is untouched.
+
+
+def test_call_entry_event_opens_a_long_position() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+
+    result = manager.place_event("ENTRY_CALL", price=100.0, quantity=10, index_id="nifty-50")
+
+    assert result.status == "PLACED"
+    assert account.side == "CALL"
+    assert account.quantity == 10
+    assert account.average_price == pytest.approx(100.0)
+    assert account.index_id == "nifty-50"
+
+
+def test_put_entry_event_opens_a_short_position() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+
+    result = manager.place_event("ENTRY_PUT", price=100.0, quantity=10, index_id="nifty-50")
+
+    assert result.status == "PLACED"
+    assert account.side == "PUT"
+    assert account.quantity == 10
+    assert account.average_price == pytest.approx(100.0)
+
+
+def test_call_exit_event_realizes_profit_when_price_rises() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+    manager.place_event("ENTRY_CALL", price=100.0, quantity=10)
+
+    result = manager.place_event("EXIT_TARGET", price=110.0, quantity=10)
+
+    assert result.status == "PLACED"
+    assert result.realized_pnl == pytest.approx(100.0)
+    assert account.quantity == 0
+    assert account.side is None
+
+
+def test_put_exit_event_realizes_profit_when_price_falls() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+    manager.place_event("ENTRY_PUT", price=100.0, quantity=10)
+
+    result = manager.place_event("EXIT_SL", price=90.0, quantity=10)
+
+    assert result.status == "PLACED"
+    assert result.realized_pnl == pytest.approx(100.0)
+    assert account.quantity == 0
+    assert account.side is None
+
+
+def test_put_exit_event_realizes_loss_when_price_rises() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+    manager.place_event("ENTRY_PUT", price=100.0, quantity=10)
+
+    result = manager.place_event("EXIT_SL", price=110.0, quantity=10)
+
+    assert result.realized_pnl == pytest.approx(-100.0)
+
+
+def test_repeated_call_entries_average_the_entry_price() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+
+    manager.place_event("ENTRY_CALL", price=100.0, quantity=10)
+    manager.place_event("ENTRY_CALL", price=120.0, quantity=10)
+
+    assert account.quantity == 20
+    assert account.average_price == pytest.approx(110.0)
+
+
+def test_cannot_open_a_put_while_a_call_is_already_open() -> None:
+    account = SimulatedAccount(cash=100_000.0)
+    manager = OrderManager(account)
+    manager.place_event("ENTRY_CALL", price=100.0, quantity=10)
+
+    result = manager.place_event("ENTRY_PUT", price=100.0, quantity=10)
+
+    assert result.status == "FAILED"
+    assert account.side == "CALL"
+    assert account.quantity == 10
+
+
+def test_exit_event_with_no_open_position_fails() -> None:
+    manager = OrderManager()
+
+    result = manager.place_event("EXIT_TARGET", price=100.0, quantity=10)
+
+    assert result.status == "FAILED"

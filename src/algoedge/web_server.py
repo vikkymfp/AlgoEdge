@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
-from algoedge import alerts, db
+from algoedge import alerts, db, exit_reasons
 from algoedge.auto_trader import run_cycle
 from algoedge.auto_trading_report import compute_equity_curve
 from algoedge.backtest import (
@@ -259,6 +259,7 @@ def auto_trading_status() -> dict:
                 "cash": manager.account.cash,
                 "quantity": manager.account.quantity,
                 "averagePrice": manager.account.average_price,
+                "side": manager.account.side,
             }
             for index_id, manager in order_managers.items()
         },
@@ -305,14 +306,21 @@ def auto_trading_consecutive_loss_halt_reset() -> dict:
     return auto_trading_status()
 
 
-def _run_and_persist_cycle(index_id: str, interval: str, quantity: int, config: StrategyConfig) -> dict:
+def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
     """Shared by the "Run cycle now" endpoint and the background scheduler,
     so a manual click and a scheduled tick always execute and persist the
-    exact same way."""
+    exact same way.
+
+    Uses the canonical fno_signals strategy (via auto_trader.run_cycle) -
+    `config` is always the per-index default built by
+    `fno_signals.config.strategy_config_for()`, matching Backtest exactly,
+    so there is no per-request RSI/EMA/SL%/TP% override anymore (the old
+    strategy_engine knobs had no equivalent in the canonical strategy's
+    EMA/RSI/Supertrend/ATR config)."""
     order_manager = order_managers[index_id]
     was_halted = risk_manager.state.consecutive_loss_halt
     result = run_cycle(
-        index_id, interval, risk_manager, order_manager, config, quantity,
+        index_id, interval, risk_manager, order_manager, quantity=quantity,
         total_open_positions=_total_open_positions(),
     )
     if not result.risk.allowed and result.risk.reason == "Daily loss limit reached":
@@ -327,32 +335,49 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int, config: 
             f"{risk_manager.state.consecutive_losses} consecutive losses - reset required",
             source="algoedge.auto_trader",
         )
-    signal_price = None if pd.isna(result.signal.price) else result.signal.price
+    event = result.event
+    if event is None:
+        return {
+            "indexId": index_id,
+            "interval": interval,
+            "signal": None,
+            "risk": {"allowed": result.risk.allowed, "reason": result.risk.reason},
+            "order": None,
+            "account": {
+                "cash": order_manager.account.cash,
+                "quantity": order_manager.account.quantity,
+                "averagePrice": order_manager.account.average_price,
+                "side": order_manager.account.side,
+            },
+        }
+    is_exit = event.kind in ("EXIT_SL", "EXIT_TARGET")
+    exit_reason = (exit_reasons.STOP_LOSS if event.kind == "EXIT_SL" else exit_reasons.TARGET) if is_exit else None
     db.record_signal(
         source="algoedge.auto_trader", index_id=index_id, timeframe=interval,
-        action=result.signal.action, reason=result.signal.reason, price=signal_price,
-        rsi=result.signal.rsi, ema=result.signal.ema,
+        action=event.kind, reason=event.option_symbol or f"exit @ {event.exit_level}",
+        price=event.underlying_price,
     )
     if result.order is not None:
         db.record_order(
             source="algoedge.auto_trader", live=False, index_id=index_id,
-            side=result.signal.action, order_type="MARKET", quantity=quantity,
-            price=signal_price, outcome=result.order.status, reason=result.order.detail,
-            realized_pnl=result.order.realized_pnl,
-            # Only set on the order that closes a position - result.signal
-            # is None for a BUY (entry).
-            exit_reason=result.signal.exit_reason if result.signal.action == "SELL" else None,
+            side="SELL" if is_exit else "BUY", right=event.right, strike=event.strike,
+            order_type="MARKET", quantity=quantity, price=event.underlying_price,
+            outcome=result.order.status, reason=result.order.detail,
+            realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,
         )
         db.record_risk_snapshot(risk_manager, event="TRADE_RECORDED")
     return {
         "indexId": index_id,
         "interval": interval,
         "signal": {
-            "action": result.signal.action,
-            "reason": result.signal.reason,
-            "price": signal_price,
-            "rsi": result.signal.rsi,
-            "ema": result.signal.ema,
+            "kind": event.kind,
+            "optionSymbol": event.option_symbol,
+            "price": event.underlying_price,
+            "stopLoss": event.stop_loss,
+            "target": event.target,
+            "exitLevel": event.exit_level,
+            "strike": event.strike,
+            "right": event.right,
         },
         "risk": {"allowed": result.risk.allowed, "reason": result.risk.reason},
         "order": None
@@ -366,35 +391,18 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int, config: 
             "cash": order_manager.account.cash,
             "quantity": order_manager.account.quantity,
             "averagePrice": order_manager.account.average_price,
+            "side": order_manager.account.side,
         },
     }
 
 
 @app.post("/api/auto-trading/run/{index_id}")
-def auto_trading_run(
-    index_id: str,
-    interval: str = "5m",
-    quantity: int = 1,
-    rsi_length: int = DEFAULT_STRATEGY_CONFIG.rsi_length,
-    rsi_lower: float = DEFAULT_STRATEGY_CONFIG.rsi_lower,
-    rsi_upper: float = DEFAULT_STRATEGY_CONFIG.rsi_upper,
-    ema_length: int = DEFAULT_STRATEGY_CONFIG.ema_length,
-    stop_loss_percent: float = DEFAULT_STRATEGY_CONFIG.stop_loss_percent,
-    target_percent: float = DEFAULT_STRATEGY_CONFIG.target_percent,
-) -> dict:
+def auto_trading_run(index_id: str, interval: str = "5m", quantity: int = 1) -> dict:
     if index_id not in INDEX_DEFINITIONS:
         raise HTTPException(status_code=404, detail="Unknown index")
     if interval not in TIMEFRAMES:
         raise HTTPException(status_code=400, detail="Unsupported interval")
-    config = StrategyConfig(
-        rsi_length=rsi_length,
-        rsi_lower=rsi_lower,
-        rsi_upper=rsi_upper,
-        ema_length=ema_length,
-        stop_loss_percent=stop_loss_percent,
-        target_percent=target_percent,
-    )
-    return _run_and_persist_cycle(index_id, interval, quantity, config)
+    return _run_and_persist_cycle(index_id, interval, quantity)
 
 
 @app.get("/api/auto-trading/signals")
@@ -490,7 +498,7 @@ def auto_trading_option_context(index_id: str) -> dict:
 
 _scheduler = AutoTradingScheduler(
     index_ids=list(INDEX_DEFINITIONS.keys()),
-    run_one=lambda index_id: _run_and_persist_cycle(index_id, "5m", 1, DEFAULT_STRATEGY_CONFIG),
+    run_one=lambda index_id: _run_and_persist_cycle(index_id, "5m", 1),
     is_enabled=lambda: risk_manager.state.auto_trading_enabled and not risk_manager.state.kill_switch,
     tick_seconds=SCHEDULER_TICK_SECONDS,
 )

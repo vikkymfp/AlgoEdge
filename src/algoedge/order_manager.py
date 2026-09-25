@@ -5,6 +5,9 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("algoedge.orders")
 
+_ENTRY_EVENT_KINDS = {"ENTRY_CALL": "CALL", "ENTRY_PUT": "PUT"}
+_EXIT_EVENT_KINDS = {"EXIT_SL", "EXIT_TARGET"}
+
 
 @dataclass
 class SimulatedAccount:
@@ -20,6 +23,9 @@ class SimulatedAccount:
     average_price: float | None = None
     index_id: str | None = None  # which index the open position is in, for
     # unrealized P&L (needs to know which current price to check against)
+    # Set only by fill_event() (the CALL/PUT path) — stays None for the
+    # legacy fill() BUY/SELL path below, which is always long-only.
+    side: str | None = None  # "CALL" | "PUT" | None
 
     def fill(self, action: str, price: float, quantity: int, index_id: str | None = None) -> float:
         """Executes a simulated fill and returns realized P&L (0.0 for entries)."""
@@ -43,6 +49,48 @@ class SimulatedAccount:
                 self.index_id = None
             return realized_pnl
         raise ValueError(f"Unsupported action: {action}")
+
+    def fill_event(self, kind: str, price: float, quantity: int, index_id: str | None = None) -> float:
+        """Paper-fills a CALL/PUT entry or exit from a canonical
+        `fno_signals.strategy.TradeEvent.kind`, and returns realized P&L
+        (0.0 for entries).
+
+        A CALL position behaves like the legacy long-only `fill()` path
+        (profits when price rises); a PUT position mirrors it (profits when
+        price falls) — the strategy itself only ever computes SL/TP on the
+        underlying's price, never an option premium, so that's what this
+        paper-fills too. Cash bookkeeping treats both sides the same way
+        `fill()` does (subtract on entry, add back on exit) — an
+        approximation appropriate for a paper account with no real
+        short-margin mechanics, not a claim about real broker margin.
+        """
+        if kind in _ENTRY_EVENT_KINDS:
+            side = _ENTRY_EVENT_KINDS[kind]
+            if self.quantity > 0 and self.side != side:
+                raise ValueError(f"Cannot open {side} while a {self.side} position is open")
+            total_cost = quantity * price
+            existing_value = self.quantity * (self.average_price or price)
+            self.average_price = (existing_value + total_cost) / (self.quantity + quantity)
+            self.side = side
+            if self.quantity == 0:
+                self.index_id = index_id
+            self.quantity += quantity
+            self.cash -= total_cost
+            return 0.0
+        if kind in _EXIT_EVENT_KINDS:
+            if self.quantity == 0 or self.side is None:
+                raise ValueError("No open position to exit")
+            close_quantity = min(quantity, self.quantity)
+            direction = 1 if self.side == "CALL" else -1
+            realized_pnl = (price - (self.average_price or price)) * close_quantity * direction
+            self.quantity -= close_quantity
+            self.cash += close_quantity * price
+            if self.quantity == 0:
+                self.average_price = None
+                self.side = None
+                self.index_id = None
+            return realized_pnl
+        raise ValueError(f"Unsupported event kind: {kind}")
 
 
 @dataclass(frozen=True)
@@ -81,4 +129,21 @@ class OrderManager:
         )
         return OrderResult(
             "PLACED", f"Paper order filled: {action} {quantity} @ {price:.2f}", realized_pnl
+        )
+
+    def place_event(self, kind: str, price: float, quantity: int, index_id: str | None = None) -> OrderResult:
+        """Same as `place()`, but for a canonical strategy's CALL/PUT
+        `TradeEvent.kind` rather than a plain BUY/SELL action."""
+        logger.info("Auto order decision: %s qty=%s price=%.2f", kind, quantity, price)
+        try:
+            realized_pnl = self.account.fill_event(kind, price, quantity, index_id=index_id)
+        except ValueError as error:
+            logger.warning("Order failed: %s", error)
+            return OrderResult("FAILED", str(error))
+        logger.info(
+            "Paper order filled: %s qty=%s price=%.2f realized_pnl=%.2f",
+            kind, quantity, price, realized_pnl,
+        )
+        return OrderResult(
+            "PLACED", f"Paper order filled: {kind} {quantity} @ {price:.2f}", realized_pnl
         )
