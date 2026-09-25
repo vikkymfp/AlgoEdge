@@ -58,6 +58,36 @@ class GrowwSessionError(RuntimeError):
     """Raised when the daily Groww session cannot be authenticated or verified."""
 
 
+class GrowwSessionUnavailableError(GrowwAPIException):
+    """Raised by SessionBoundClient when no Groww session can be obtained
+    (it expired and could not be regenerated from the API key/secret). A
+    GrowwAPIException so every existing `except GrowwAPIException` handler
+    in the live flow treats it exactly like any other failed Groww call -
+    the order is not placed and is never retried."""
+
+    def __init__(self, msg: str) -> None:
+        super().__init__(msg=msg, code="SESSION_UNAVAILABLE")
+
+
+class SessionBoundClient:
+    """What `fno_signals --live` holds instead of one permanent client:
+    every broker operation asks the process-lifetime TokenService for its
+    current session first (TokenService.effective_client() regenerates an
+    expired session from the stored API key/secret). Only the lookup is
+    repeated - a call that fails, including place_order, is never retried
+    here."""
+
+    def __init__(self, token_service: TokenService) -> None:
+        self.token_service = token_service
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            client = self.token_service.effective_client()
+        except BrokerNotConnectedError as error:
+            raise GrowwSessionUnavailableError(str(error)) from error
+        return getattr(client, name)
+
+
 class ContractNotFoundError(RuntimeError):
     """Raised when no live, tradeable contract matches the requested strike/right.
 
@@ -66,9 +96,11 @@ class ContractNotFoundError(RuntimeError):
     """
 
 
-def generate_daily_session(settings: Settings | None = None) -> GrowwAPI:
+def generate_daily_session(settings: Settings | None = None) -> SessionBoundClient:
     """Authenticates against the Groww API and verifies the session with a
-    real API call before returning the client.
+    real API call before returning a client bound to it for the whole run
+    (see SessionBoundClient - a session that expires mid-run is regenerated
+    on the next broker operation, not left dead until a restart).
 
     Delegates entirely to algoedge's TokenService - the same credential
     resolution the web dashboard uses (ALGOEDGE_GROWW_* settings as the
@@ -80,9 +112,10 @@ def generate_daily_session(settings: Settings | None = None) -> GrowwAPI:
     """
     token_service = TokenService(settings or get_settings())
     try:
-        return token_service.effective_client()
+        token_service.effective_client()
     except BrokerNotConnectedError as error:
         raise GrowwSessionError(str(error)) from error
+    return SessionBoundClient(token_service)
 
 
 @dataclass(frozen=True)

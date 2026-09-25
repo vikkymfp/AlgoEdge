@@ -280,7 +280,8 @@ def test_raw_token_never_appears_in_status_masked_fields(monkeypatch) -> None:
     service.update_access_token(REAL_SECRET)
     status = service.status()
 
-    assert REAL_SECRET not in (status.access_token_masked or "")
+    assert not hasattr(status, "access_token_masked")  # the session token is never displayed
+    assert REAL_SECRET not in repr(status)
     assert REAL_SECRET not in (status.api_key_masked or "")
     assert REAL_SECRET not in (status.api_secret_masked or "")
 
@@ -365,7 +366,7 @@ def test_token_close_to_estimated_daily_reset_reports_expiring_soon(monkeypatch)
     assert status.connection_status == "CONNECTED"
 
 
-def test_token_past_estimated_expiry_reports_expired_even_before_a_call_fails(monkeypatch) -> None:
+def test_token_past_estimated_expiry_reports_renewal_due_not_expired(monkeypatch) -> None:
     install_fake_groww(monkeypatch)
     service = TokenService(make_settings())
     service.update_access_token("a-token")
@@ -373,8 +374,10 @@ def test_token_past_estimated_expiry_reports_expired_even_before_a_call_fails(mo
     service._token_expiry_at = datetime.now(IST) - timedelta(minutes=1)
 
     status = service.status()
-    assert status.token_status == "EXPIRED"
-    assert status.connection_status == "CONNECTED"  # real evidence unchanged until a real call actually fails
+    # Only the estimate has passed; the session still works, so it is due
+    # for renewal - EXPIRED is reserved for a real authentication failure.
+    assert status.token_status == "RENEWAL_DUE"
+    assert status.connection_status == "CONNECTED"
 
 
 # -- invalid token (never valid, distinct from expired) --------------------

@@ -46,12 +46,17 @@ class GrowwBroker:
             )
         if action not in {"buy", "sell"}:
             raise ValueError(f"Unsupported action: {action}")
+        # effective_client() first: it regenerates an expired session from
+        # the API key/secret, so a merely stale status doesn't reject the
+        # order. It still raises if no authenticated session can be had, and
+        # a connection that isn't CONNECTED afterwards still blocks.
+        client = self.client
         if not self.token_service.is_connected():
             raise BrokerNotConnectedError(
                 "Groww is not connected. Configure it in API Management before trading."
             )
 
-        result = self.client.place_order(
+        result = client.place_order(
             trading_symbol=self.settings.symbol,
             quantity=quantity or self.settings.groww_quantity,
             validity="DAY",

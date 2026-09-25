@@ -617,9 +617,15 @@ def manual_trading_place_order(
             detail="Live trading is disabled. Set ALGOEDGE_LIVE_TRADING=true to place real orders.",
         )
     # Order Request -> API Connection Check -> Token Valid? -> ... -> Groww API.
-    # Checked up front, before resolving a contract or touching the broker
-    # at all, so a stale/missing connection never gets partway through an
-    # order attempt.
+    # Checked up front, before resolving a contract or placing anything, so
+    # a missing connection never gets partway through an order attempt.
+    # effective_client() runs first so an expired session is regenerated
+    # from the API key/secret rather than rejected on a stale status; a
+    # genuine authentication failure (no session obtainable) still blocks.
+    try:
+        token_service.effective_client()
+    except BrokerNotConnectedError:
+        pass  # reported by the connection check just below
     if not token_service.is_connected():
         raise HTTPException(
             status_code=503,
@@ -1023,16 +1029,24 @@ def _broker_status_payload() -> dict:
         "broker": status.broker.upper(),
         "apiKeyMasked": status.api_key_masked,
         "apiSecretMasked": status.api_secret_masked,
-        "accessTokenMasked": status.access_token_masked,
-        "tokenStatus": status.token_status,
+        # The API key/secret are the persistent credentials. The access
+        # token is session state generated from them, so it is never shown
+        # as a credential - only the session's status and lifecycle are.
+        "authMode": status.auth_mode,
+        "autoReauthAvailable": status.auto_reauth_available,
+        "sessionStatus": status.token_status,
         "connectionStatus": status.connection_status,
-        "tokenCreatedAt": status.token_created_at,
-        "tokenExpiryAt": status.token_expiry_at,
-        "tokenExpiryIsEstimated": status.token_expiry_is_estimated,
+        "sessionCreatedAt": status.token_created_at,
+        "sessionExpiresAt": status.token_expiry_at,
+        "sessionExpiryIsEstimated": status.token_expiry_is_estimated,
         "lastValidatedAt": status.last_validated_at,
         "lastSuccessfulRequestAt": status.last_successful_request_at,
         "lastError": status.last_error,
         "credentialsPersisted": status.credentials_persisted,
+        # Endpoint-level availability (e.g. market data denied by a 403).
+        # Informational only - connectionStatus alone says whether the
+        # broker session is connected.
+        "capabilities": status.capabilities,
         # Manual/live trading requires an active Groww connection. Auto
         # Trading is deliberately paper-only (see auto_trader.py/README
         # notes) and never calls Groww to place an order, so a broken
@@ -1040,6 +1054,14 @@ def _broker_status_payload() -> dict:
         # its own enable/disable + kill switch instead.
         "manualTradingBlocked": not token_service.is_connected(),
     }
+
+
+def _broker_update_payload() -> dict:
+    """The current status plus the result of the update operation itself,
+    kept separate: "update.persisted" says whether the new credentials were
+    stored, while connectionStatus is the only thing that says whether the
+    broker is connected right now."""
+    return {**_broker_status_payload(), "update": {"persisted": bool(token_service.last_update_persisted)}}
 
 
 @app.get("/api/broker/status")
@@ -1068,7 +1090,7 @@ def broker_update_credentials(request: CredentialsUpdateRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except BrokerValidationError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
-    return _broker_status_payload()
+    return _broker_update_payload()
 
 
 @app.post("/api/broker/access-token")
@@ -1079,6 +1101,20 @@ def broker_update_access_token(request: AccessTokenUpdateRequest) -> dict:
     been proven to work."""
     try:
         token_service.update_access_token(request.accessToken)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except BrokerValidationError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return _broker_update_payload()
+
+
+@app.post("/api/broker/reauthenticate")
+def broker_reauthenticate() -> dict:
+    """Generates a new session from the stored API key/secret right away
+    (e.g. after approving API access in the Groww app). Never places an
+    order."""
+    try:
+        token_service.reauthenticate()
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except BrokerValidationError as error:
@@ -1294,7 +1330,8 @@ def system_health() -> dict:
             "lastSuccessfulCheckAt": db_check["lastSuccessfulCheckAt"],
         },
         "broker": {
-            "status": "CONNECTED" if token_service.is_connected() else broker.connection_status,
+            "status": broker.connection_status,
+            "capabilities": broker.capabilities,
         },
         "reconciliation": {"status": reconciliation_status},
         "riskEngine": {"status": risk_status},
