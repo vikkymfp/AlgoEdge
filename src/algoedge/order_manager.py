@@ -4,6 +4,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from algoedge.option_contract import OptionContract
+
 logger = logging.getLogger("algoedge.orders")
 
 _ENTRY_EVENT_KINDS = {"ENTRY_CALL": "CALL", "ENTRY_PUT": "PUT"}
@@ -53,6 +55,13 @@ class SimulatedAccount:
     # Also what blocks a stale ENTRY event from reopening a position after
     # today's square-off has already happened.
     square_off_date: str | None = None
+    # The instrument-master-validated contract this open position was
+    # actually resolved against (Phase 5) - set only by fill_event()'s
+    # entry branch when a `contract` is supplied, cleared when the
+    # position fully closes. Restoring this on startup (see
+    # auto_trader.restore_account_state()) is what lets an already-open
+    # position survive a restart WITHOUT re-resolving a contract.
+    contract: OptionContract | None = None
 
     def fill(self, action: str, price: float, quantity: int, index_id: str | None = None) -> float:
         """Executes a simulated fill and returns realized P&L (0.0 for entries)."""
@@ -77,7 +86,10 @@ class SimulatedAccount:
             return realized_pnl
         raise ValueError(f"Unsupported action: {action}")
 
-    def fill_event(self, kind: str, price: float, quantity: int, index_id: str | None = None) -> float:
+    def fill_event(
+        self, kind: str, price: float, quantity: int, index_id: str | None = None,
+        contract: OptionContract | None = None,
+    ) -> float:
         """Paper-fills a CALL/PUT entry or exit from a canonical
         `fno_signals.strategy.TradeEvent.kind`, and returns realized P&L
         (0.0 for entries).
@@ -90,6 +102,12 @@ class SimulatedAccount:
         `fill()` does (subtract on entry, add back on exit) — an
         approximation appropriate for a paper account with no real
         short-margin mechanics, not a claim about real broker margin.
+
+        `contract` (Phase 5) is the instrument-master-validated
+        `OptionContract` this entry is opening against - required for a
+        genuinely new entry (an already-open position adding to itself
+        keeps its original contract, see below), never used or required
+        for an exit/square-off, which only ever closes what's already open.
         """
         if kind in _ENTRY_EVENT_KINDS:
             side = _ENTRY_EVENT_KINDS[kind]
@@ -101,6 +119,7 @@ class SimulatedAccount:
             self.side = side
             if self.quantity == 0:
                 self.index_id = index_id
+                self.contract = contract
             self.quantity += quantity
             self.cash -= total_cost
             return 0.0
@@ -116,6 +135,7 @@ class SimulatedAccount:
                 self.average_price = None
                 self.side = None
                 self.index_id = None
+                self.contract = None
             return realized_pnl
         raise ValueError(f"Unsupported event kind: {kind}")
 
@@ -158,12 +178,17 @@ class OrderManager:
             "PLACED", f"Paper order filled: {action} {quantity} @ {price:.2f}", realized_pnl
         )
 
-    def place_event(self, kind: str, price: float, quantity: int, index_id: str | None = None) -> OrderResult:
+    def place_event(
+        self, kind: str, price: float, quantity: int, index_id: str | None = None,
+        contract: OptionContract | None = None,
+    ) -> OrderResult:
         """Same as `place()`, but for a canonical strategy's CALL/PUT
-        `TradeEvent.kind` rather than a plain BUY/SELL action."""
+        `TradeEvent.kind` rather than a plain BUY/SELL action. `contract`
+        is the instrument-master-validated `OptionContract` a new entry is
+        opening against (Phase 5) - see `SimulatedAccount.fill_event()`."""
         logger.info("Auto order decision: %s qty=%s price=%.2f", kind, quantity, price)
         try:
-            realized_pnl = self.account.fill_event(kind, price, quantity, index_id=index_id)
+            realized_pnl = self.account.fill_event(kind, price, quantity, index_id=index_id, contract=contract)
         except ValueError as error:
             logger.warning("Order failed: %s", error)
             return OrderResult("FAILED", str(error))

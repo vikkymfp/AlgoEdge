@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
 from algoedge.market_pulse import TIMEFRAMES
+from algoedge.option_contract import OptionContract
 from algoedge.order_manager import OrderManager, OrderResult, SimulatedAccount
 from algoedge.risk_manager import IST, RiskDecision, RiskManager
 from fno_signals.config import INDEX_MAP, StrategyConfig, strategy_config_for
@@ -44,6 +46,7 @@ def run_cycle(
     quantity: int = 1,
     now: datetime | None = None,
     total_open_positions: int | None = None,
+    resolve_contract_fn: Callable[[TradeEvent], OptionContract | None] | None = None,
 ) -> AutoTradeCycleResult:
     """One full pass of Auto Trading's paper flow, using the exact same
     signal engine as Backtest and `fno_signals --live`:
@@ -77,6 +80,19 @@ def run_cycle(
     mandated square-off isn't something a trading bot's own kill switch
     can suppress. It still calls `risk_manager.record_trade()` so P&L/
     trade-count/consecutive-loss accounting stays correct.
+
+    Option contract resolution (Phase 5): `resolve_contract_fn`, if given,
+    is called for a genuinely new ENTRY event only (never for an exit or
+    square-off, which only ever close whatever contract the position was
+    already opened against) and must return a validated
+    `algoedge.option_contract.OptionContract`, or `None` if nothing could
+    be resolved. `None` (or `resolve_contract_fn` itself being `None`, the
+    default) refuses the entry outright - `OrderManager.place_event()` is
+    never called for an unresolved/ambiguous contract. This module never
+    performs the resolution itself (and has no growwapi/TokenService
+    dependency to do so) - the actual instrument-master lookup lives in
+    whatever the caller passes in (see web_server.py), keeping Auto Trade
+    exactly as broker-import-free as it was before this phase.
     """
     if index_id not in _INDEX_CHOICE:
         raise ValueError(f"Unsupported index_id for Auto Trade: {index_id}")
@@ -163,6 +179,21 @@ def run_cycle(
             event, RiskDecision(False, "Square-off already occurred for today - no new entries"), None
         )
 
+    contract: OptionContract | None = None
+    if event.kind in _ENTRY_KINDS:
+        # A new position may only ever open against a validated contract -
+        # never OrderManager first, resolution second. A soft failure here
+        # (resolver unavailable, no match this cycle) behaves exactly like
+        # any other blocked signal: last_event_at is not advanced, so it
+        # remains eligible to retry on a later cycle.
+        if resolve_contract_fn is None:
+            return AutoTradeCycleResult(
+                event, RiskDecision(False, "Option contract resolution unavailable"), None
+            )
+        contract = resolve_contract_fn(event)
+        if contract is None:
+            return AutoTradeCycleResult(event, RiskDecision(False, "No matching option contract found"), None)
+
     # RiskManager.check()/record_trade() only understand BUY/SELL (kept
     # unchanged, per the canonical-strategy unification's own scope) - an
     # entry (CALL or PUT) always "opens"/uses capital like a BUY, an exit
@@ -175,7 +206,9 @@ def run_cycle(
     if not decision.allowed:
         return AutoTradeCycleResult(event, decision, None)
 
-    order_result = order_manager.place_event(event.kind, event.underlying_price, quantity, index_id=index_id)
+    order_result = order_manager.place_event(
+        event.kind, event.underlying_price, quantity, index_id=index_id, contract=contract
+    )
     if order_result.status == "PLACED":
         is_exit = event.kind in _EXIT_KINDS
         risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
@@ -204,6 +237,13 @@ def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -
     its own schedule, exactly as if the process had never restarted. If a
     position was already squared off before the restart, `square_off_date`
     restoring correctly prevents `run_cycle()` from doing it again today.
+
+    `contract` (Phase 5), if present in `snapshot`, is restored as-is -
+    NEVER re-resolved against the instrument master. The position was
+    already validated once, when it was opened; re-resolving on every
+    restart would be both unnecessary (per this phase's own requirement)
+    and would risk a *different* contract being picked if the instrument
+    master has since rolled to a new expiry.
     """
     try:
         cash = float(snapshot["cash"])
@@ -212,6 +252,7 @@ def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -
         side = snapshot["side"]
         last_event_at = snapshot["last_event_at"]
         square_off_date = snapshot.get("square_off_date")
+        contract_data = snapshot.get("contract")
         if average_price is not None:
             average_price = float(average_price)
         if side is not None and side not in ("CALL", "PUT"):
@@ -223,6 +264,16 @@ def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -
             # persisted/restored timestamp in this app assumes IST
             # (algoedge.risk_manager.IST) when it comes back naive.
             last_event_at = last_event_at.replace(tzinfo=IST)
+        contract: OptionContract | None = None
+        if contract_data is not None:
+            contract = OptionContract(
+                trading_symbol=str(contract_data["trading_symbol"]),
+                underlying=str(contract_data["underlying"]),
+                right=str(contract_data["right"]),
+                strike=int(contract_data["strike"]),
+                expiry=contract_data["expiry"],
+                instrument_id=contract_data.get("instrument_id"),
+            )
     except (KeyError, TypeError, ValueError) as error:
         logger.warning("Could not restore auto trade account state, starting flat instead: %s", error)
         return
@@ -233,3 +284,4 @@ def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -
     account.side = side
     account.last_event_at = last_event_at
     account.square_off_date = square_off_date
+    account.contract = contract

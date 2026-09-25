@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
@@ -40,6 +42,11 @@ from algoedge.market_pulse import (
     TIMEFRAMES,
     get_index_candles,
     get_index_summary,
+)
+from algoedge.option_contract import (
+    OptionContract,
+    OptionContractResolutionError,
+    resolve_option_contract,
 )
 from algoedge.order_manager import OrderManager
 from algoedge.pnl import compute_paper_unrealized_pnl, compute_realized_pnl
@@ -106,6 +113,57 @@ for _index_id, _order_manager in order_managers.items():
     _prior_account_state = db.load_latest_auto_trade_account_state(_index_id)
     if _prior_account_state is not None:
         restore_account_state(_order_manager.account, _prior_account_state)
+
+logger = logging.getLogger("algoedge.web_server")
+
+# Auto Trade contract resolution (Phase 5) - a live, read-only instrument-
+# master fetch reusing the SAME broker connection already owned above for
+# Manual Trading/Live Grid (never places an order itself). Cached here
+# separately from fno_signals.broker's own instrument cache since Auto
+# Trade's paper flow has no client of its own to key a cache on - see
+# algoedge.auto_trader.run_cycle()'s `resolve_contract_fn` parameter,
+# which is what this function is built to satisfy.
+_AUTO_TRADE_INSTRUMENTS_TTL = 300.0
+_auto_trade_instruments_cache: tuple[float, object] | None = None
+
+
+def _get_auto_trade_instruments():
+    global _auto_trade_instruments_cache
+    now_mono = time.monotonic()
+    if (
+        _auto_trade_instruments_cache is not None
+        and now_mono - _auto_trade_instruments_cache[0] < _AUTO_TRADE_INSTRUMENTS_TTL
+    ):
+        return _auto_trade_instruments_cache[1]
+    try:
+        instruments = broker.client.get_all_instruments()
+    except (BrokerNotConnectedError, GrowwAPIException, OSError, TypeError, ValueError) as error:
+        logger.warning("Auto Trade instrument master unavailable: %s", error)
+        return None
+    _auto_trade_instruments_cache = (now_mono, instruments)
+    return instruments
+
+
+def _resolve_auto_trade_contract(index_id: str, event) -> OptionContract | None:
+    """Built fresh per `_run_and_persist_cycle()` call and passed as
+    `run_cycle()`'s `resolve_contract_fn` - `event.strike`/`event.right`
+    are already the canonical strategy's own ATM/strike-step choice
+    (unchanged by this phase); this only validates that pair against the
+    live instrument master and returns the real, tradeable contract, or
+    None for anything that doesn't resolve cleanly."""
+    instruments = _get_auto_trade_instruments()
+    if instruments is None:
+        return None
+    index_config = INDEX_MAP[DASHBOARD_INDEX_IDS[index_id]]
+    try:
+        return resolve_option_contract(
+            instruments, index_config.groww_underlying, event.strike, event.right,
+            as_of=event.timestamp.date(),
+        )
+    except OptionContractResolutionError as error:
+        logger.warning("Auto Trade contract resolution failed for %s: %s", index_id, error)
+        return None
+
 
 app = FastAPI()
 
@@ -330,9 +388,16 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
     EMA/RSI/Supertrend/ATR config)."""
     order_manager = order_managers[index_id]
     was_halted = risk_manager.state.consecutive_loss_halt
+    # Captured before the cycle runs: for an EXIT/SQUARE_OFF that closes
+    # the position, fill_event() clears account.contract as part of the
+    # same fill, so this is the only way to still have it for the order
+    # record below. For a fresh ENTRY, account.contract is None here and
+    # gets set fresh by the cycle instead - see the `or` fallback below.
+    contract_before_cycle = order_manager.account.contract
     result = run_cycle(
         index_id, interval, risk_manager, order_manager, quantity=quantity,
         total_open_positions=_total_open_positions(),
+        resolve_contract_fn=lambda event: _resolve_auto_trade_contract(index_id, event),
     )
     if not result.risk.allowed and result.risk.reason == "Daily loss limit reached":
         alerts.raise_alert(
@@ -376,9 +441,12 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
         price=event.underlying_price,
     )
     if result.order is not None:
+        resolved_contract = order_manager.account.contract or contract_before_cycle
         db.record_order(
             source="algoedge.auto_trader", live=False, index_id=index_id,
             side="SELL" if is_exit else "BUY", right=event.right, strike=event.strike,
+            trading_symbol=resolved_contract.trading_symbol if resolved_contract else None,
+            expiry_date=resolved_contract.expiry if resolved_contract else None,
             order_type="MARKET", quantity=quantity, price=event.underlying_price,
             outcome=result.order.status, reason=result.order.detail,
             realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,

@@ -12,15 +12,17 @@ the project's existing db.py patterns (record_risk_snapshot/
 load_latest_risk_state) exactly and are not re-tested here.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from algoedge import auto_trader
 from algoedge.auto_trader import restore_account_state
+from algoedge.option_contract import OptionContract
 from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, RiskManager
+from fno_signals.strategy import TradeEvent
 
 TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
 
@@ -46,6 +48,20 @@ DOWNTREND_60 = trending_df(60, start_price=300.0, step=-2.0)  # ENTRY_PUT at bar
 
 def patch_fetch(monkeypatch, df: pd.DataFrame) -> None:
     monkeypatch.setattr(auto_trader, "fetch_underlying_data", lambda *_a, **_kw: df)
+
+
+def _fake_resolve_contract(event: TradeEvent) -> OptionContract:
+    """Phase 5 stand-in - this file is about restart persistence, not
+    resolution itself, so entries resolve cleanly by default."""
+    return OptionContract(
+        trading_symbol=f"NIFTY26SEP{event.strike}{event.right}",
+        underlying="NIFTY", right=event.right, strike=event.strike, expiry=date(2026, 9, 30),
+    )
+
+
+def run_cycle(*args, **kwargs):
+    kwargs.setdefault("resolve_contract_fn", _fake_resolve_contract)
+    return auto_trader.run_cycle(*args, **kwargs)
 
 
 # ---------- 1. Restart while flat ----------
@@ -123,7 +139,7 @@ def test_restart_after_an_entry_fill_does_not_refill_it(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])  # window still ends right at the same entry bar
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 
@@ -151,7 +167,7 @@ def test_restart_after_an_exit_fill_restores_flat_and_allows_a_new_entry(monkeyp
     reversal_downtrend = trending_df(60, start_price=300.0, step=-2.0, start="2026-09-23 11:20")
     patch_fetch(monkeypatch, reversal_downtrend.iloc[:14])
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(hours=2),
     )
@@ -177,7 +193,7 @@ def test_restart_with_a_risk_blocked_event_still_retries_it_after_restart(monkey
     risk_manager = RiskManager()  # auto trading NOT enabled - the "blocked" condition
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
 
-    blocked = auto_trader.run_cycle(
+    blocked = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
     assert blocked.order is None
@@ -189,7 +205,7 @@ def test_restart_with_a_risk_blocked_event_still_retries_it_after_restart(monkey
     post_restart_manager = OrderManager(post_restart_account)
     risk_manager.enable_auto_trading()  # the gate that was blocking it reopens
 
-    retried = auto_trader.run_cycle(
+    retried = run_cycle(
         "nifty-50", "5m", risk_manager, post_restart_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )
@@ -267,7 +283,7 @@ def test_duplicate_event_after_restart_is_still_refused_with_max_positions_above
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
 
     for i in range(3):
-        auto_trader.run_cycle(
+        run_cycle(
             "nifty-50", "5m", risk_manager, order_manager, quantity=1,
             now=TRADING_HOURS_NOW + timedelta(minutes=5 * i), total_open_positions=0,
         )
@@ -290,13 +306,13 @@ def test_multiple_new_events_after_restart_are_processed_one_per_cycle_in_order(
     risk_manager.enable_auto_trading()
 
     patch_fetch(monkeypatch, UPTREND_60)  # full window: entry (bar 16) + exit (bar 24), both new
-    first = auto_trader.run_cycle(
+    first = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
     assert first.event.kind == "ENTRY_CALL"
     assert account.quantity == 1
 
-    second = auto_trader.run_cycle(
+    second = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )

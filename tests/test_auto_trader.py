@@ -1,10 +1,11 @@
 import inspect
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from algoedge import auto_trader
+from algoedge.option_contract import OptionContract
 from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, RiskLimits, RiskManager
 from fno_signals import strategy as strategy_module
@@ -15,9 +16,26 @@ from fno_signals.strategy import run as run_strategy
 TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
 
 
+def fake_resolve_contract(event: TradeEvent) -> OptionContract:
+    """A stand-in for Phase 5's real instrument-master resolution - this
+    file (Phase 1-3's own orchestration tests) isn't about resolution
+    itself (see tests/test_option_contract.py / tests/test_auto_trade_
+    contract_resolution.py for that), so every entry resolves cleanly by
+    default here."""
+    return OptionContract(
+        trading_symbol=f"NIFTY26SEP{event.strike}{event.right}",
+        underlying="NIFTY", right=event.right, strike=event.strike, expiry=date(2026, 9, 30),
+    )
+
+
+def run_cycle(*args, **kwargs):
+    kwargs.setdefault("resolve_contract_fn", fake_resolve_contract)
+    return auto_trader.run_cycle(*args, **kwargs)
+
+
 def make_df(n: int = 5) -> pd.DataFrame:
     """A minimal OHLCV DataFrame shaped like fno_signals.main.fetch_underlying_data()'s
-    real return value - what auto_trader.run_cycle() now requires instead of
+    real return value - what run_cycle() now requires instead of
     market_pulse's Close-only candle dicts."""
     index = pd.date_range("2026-09-23 09:15", periods=n, freq="5min", tz="Asia/Kolkata")
     closes = [100.0] * n
@@ -62,7 +80,7 @@ def test_no_events_produces_no_risk_check_or_order(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager)
+    result = run_cycle("nifty-50", "5m", risk_manager, order_manager)
 
     assert result.order is None
     assert result.event is None
@@ -74,7 +92,7 @@ def test_call_entry_blocked_when_auto_trading_disabled(monkeypatch) -> None:
     risk_manager = RiskManager()  # auto trading NOT enabled
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager)
+    result = run_cycle("nifty-50", "5m", risk_manager, order_manager)
 
     assert result.risk.allowed is False
     assert result.order is None
@@ -87,7 +105,7 @@ def test_call_entry_places_order_and_opens_call_position(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=2, now=TRADING_HOURS_NOW
     )
 
@@ -106,7 +124,7 @@ def test_put_entry_places_order_and_opens_put_position(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=3, now=TRADING_HOURS_NOW
     )
 
@@ -125,7 +143,7 @@ def test_call_exit_realizes_profit_when_price_rises(monkeypatch) -> None:
     account = SimulatedAccount(cash=100_000.0, quantity=10, average_price=100.0, side="CALL")
     order_manager = OrderManager(account)
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=10, now=TRADING_HOURS_NOW
     )
 
@@ -142,7 +160,7 @@ def test_put_exit_realizes_profit_when_price_falls(monkeypatch) -> None:
     account = SimulatedAccount(cash=100_000.0, quantity=10, average_price=100.0, side="PUT")
     order_manager = OrderManager(account)
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=10, now=TRADING_HOURS_NOW
     )
 
@@ -161,7 +179,7 @@ def test_put_exit_realizes_loss_when_price_rises(monkeypatch) -> None:
     account = SimulatedAccount(cash=100_000.0, quantity=10, average_price=100.0, side="PUT")
     order_manager = OrderManager(account)
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=10, now=TRADING_HOURS_NOW
     )
 
@@ -180,7 +198,7 @@ def test_entry_event_carries_the_strategys_own_sl_and_target_unchanged(monkeypat
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 
@@ -197,7 +215,7 @@ def test_total_open_positions_overrides_own_account_for_global_risk_cap(monkeypa
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()  # flat
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "sensex", "5m", risk_manager, order_manager,
         quantity=1, now=TRADING_HOURS_NOW, total_open_positions=1,
     )
@@ -213,7 +231,7 @@ def test_entry_order_value_over_the_limit_is_blocked(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=10, now=TRADING_HOURS_NOW,
     )  # 10 * price(100.0) = 1000, over the 500 limit
 
@@ -228,14 +246,14 @@ def test_a_losing_exit_starts_a_cooldown_that_blocks_the_next_entry(monkeypatch)
     risk_manager.enable_auto_trading()
     order_manager = OrderManager(SimulatedAccount(cash=100_000.0, quantity=10, average_price=100.0, side="CALL"))
 
-    exit_result = auto_trader.run_cycle(
+    exit_result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=10, now=TRADING_HOURS_NOW,
     )
     assert exit_result.order.status == "PLACED"
     assert risk_manager.state.last_exit_at == TRADING_HOURS_NOW
 
     patch_data_and_events(monkeypatch, [call_entry_event(90.0, timestamp="2026-09-23 10:10")])
-    reentry_result = auto_trader.run_cycle(
+    reentry_result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=1),
     )
@@ -250,7 +268,7 @@ def test_unsupported_index_id_is_rejected(monkeypatch) -> None:
     order_manager = OrderManager()
 
     with pytest.raises(ValueError, match="Unsupported index_id"):
-        auto_trader.run_cycle("dow-jones", "5m", risk_manager, order_manager)
+        run_cycle("dow-jones", "5m", risk_manager, order_manager)
 
 
 def test_auto_trader_module_never_calls_the_live_broker() -> None:
@@ -309,7 +327,7 @@ def test_signal_parity_between_auto_trade_and_the_canonical_strategy(monkeypatch
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 

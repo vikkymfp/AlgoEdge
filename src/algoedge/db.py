@@ -82,6 +82,12 @@ _PENDING_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
     },
     "auto_trade_account_snapshots": {
         "square_off_date": "NVARCHAR(10) NULL",
+        "contract_trading_symbol": "NVARCHAR(64) NULL",
+        "contract_underlying": "NVARCHAR(32) NULL",
+        "contract_right": "NVARCHAR(4) NULL",
+        "contract_strike": "INT NULL",
+        "contract_expiry": "DATE NULL",
+        "contract_instrument_id": "NVARCHAR(64) NULL",
     },
 }
 
@@ -371,9 +377,10 @@ def record_auto_trade_account_snapshot(index_id: str, account: Any, *, event: st
     """Persists a paper Auto Trade SimulatedAccount's current state
     (algoedge.order_manager.SimulatedAccount) - callers pass the account
     object itself (duck-typed: cash/quantity/average_price/side/
-    last_event_at/square_off_date) rather than importing the class here,
-    to avoid a fno_signals/algoedge.order_manager dependency in this
-    module."""
+    last_event_at/square_off_date/contract) rather than importing the
+    class here, to avoid a fno_signals/algoedge.order_manager dependency
+    in this module."""
+    contract = account.contract
     with _session_scope() as session:
         if session is None:
             return
@@ -381,6 +388,12 @@ def record_auto_trade_account_snapshot(index_id: str, account: Any, *, event: st
             index_id=index_id, event=event, cash=account.cash, quantity=account.quantity,
             average_price=account.average_price, side=account.side,
             last_event_at=account.last_event_at, square_off_date=account.square_off_date,
+            contract_trading_symbol=contract.trading_symbol if contract else None,
+            contract_underlying=contract.underlying if contract else None,
+            contract_right=contract.right if contract else None,
+            contract_strike=contract.strike if contract else None,
+            contract_expiry=contract.expiry if contract else None,
+            contract_instrument_id=contract.instrument_id if contract else None,
         ))
 
 
@@ -402,10 +415,17 @@ def load_latest_auto_trade_account_state(index_id: str) -> dict[str, Any] | None
         )
         if row is None:
             return None
+        contract = None
+        if row.contract_trading_symbol is not None:
+            contract = {
+                "trading_symbol": row.contract_trading_symbol, "underlying": row.contract_underlying,
+                "right": row.contract_right, "strike": row.contract_strike,
+                "expiry": row.contract_expiry, "instrument_id": row.contract_instrument_id,
+            }
         return {
             "cash": row.cash, "quantity": row.quantity, "average_price": row.average_price,
             "side": row.side, "last_event_at": row.last_event_at,
-            "square_off_date": row.square_off_date,
+            "square_off_date": row.square_off_date, "contract": contract,
         }
     except SQLAlchemyError as error:
         logger.warning("Could not load prior auto trade account state for %s: %s", index_id, error)

@@ -14,19 +14,35 @@ SimulatedAccount and monkeypatches only the data-fetch boundary
 (fetch_underlying_data), never a broker client.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
 
 from algoedge import auto_trader
+from algoedge.option_contract import OptionContract
 from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, RiskLimits, RiskManager
 from fno_signals.config import INDEX_MAP, strategy_config_for
+from fno_signals.strategy import TradeEvent
 from fno_signals.strategy import run as run_strategy
 
 TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
 CONFIG = strategy_config_for(INDEX_MAP[1])  # nifty-50 -> choice 1
+
+
+def _fake_resolve_contract(event: TradeEvent) -> OptionContract:
+    """Phase 5 stand-in - this file validates Phase 1-4 behavior end-to-end,
+    not resolution itself, so entries resolve cleanly by default."""
+    return OptionContract(
+        trading_symbol=f"NIFTY26SEP{event.strike}{event.right}",
+        underlying="NIFTY", right=event.right, strike=event.strike, expiry=date(2026, 9, 30),
+    )
+
+
+def _run_cycle(*args, **kwargs):
+    kwargs.setdefault("resolve_contract_fn", _fake_resolve_contract)
+    return auto_trader.run_cycle(*args, **kwargs)
 
 
 def trending_df(n: int, start_price: float, step: float, start: str = "2026-09-23 09:15") -> pd.DataFrame:
@@ -61,7 +77,7 @@ def patch_fetch(monkeypatch, df: pd.DataFrame) -> None:
 def test_signal_parity_on_real_uptrend_data(monkeypatch) -> None:
     """The critical requirement, restated with the real indicator pipeline
     (EMA/RSI/Supertrend/ATR actually computed, not monkeypatched): identical
-    OHLCV input through auto_trader.run_cycle() and a direct
+    OHLCV input through _run_cycle() and a direct
     fno_signals.strategy.run() call must produce an identical event."""
     patch_fetch(monkeypatch, UPTREND_60)
     _expected_results, expected_events = run_strategy(UPTREND_60, CONFIG, "NIFTY 50")
@@ -75,7 +91,7 @@ def test_signal_parity_on_real_uptrend_data(monkeypatch) -> None:
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
-    result = auto_trader.run_cycle(
+    result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 
@@ -95,7 +111,7 @@ def test_signal_parity_on_real_downtrend_data(monkeypatch) -> None:
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
-    result = auto_trader.run_cycle(
+    result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 
@@ -117,7 +133,7 @@ def test_call_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> 
     order_manager = OrderManager()
 
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
-    entry_result = auto_trader.run_cycle(
+    entry_result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
     assert entry_result.event.kind == "ENTRY_CALL"
@@ -129,7 +145,7 @@ def test_call_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> 
     # Cycle 2, 5 minutes later: the full window now also contains the
     # target exit that happens further along the same real trend.
     patch_fetch(monkeypatch, UPTREND_60)
-    exit_result = auto_trader.run_cycle(
+    exit_result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )
@@ -150,14 +166,14 @@ def test_put_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> N
     order_manager = OrderManager()
 
     patch_fetch(monkeypatch, DOWNTREND_60.iloc[:14])  # entry bar is index 13
-    entry_result = auto_trader.run_cycle(
+    entry_result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=2, now=TRADING_HOURS_NOW
     )
     assert entry_result.event.kind == "ENTRY_PUT"
     entry_price = order_manager.account.average_price
 
     patch_fetch(monkeypatch, DOWNTREND_60)
-    exit_result = auto_trader.run_cycle(
+    exit_result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=2,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )
@@ -179,7 +195,7 @@ def test_atr_based_sl_and_target_keep_the_configured_risk_reward_ratio(monkeypat
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle(
+    result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW
     )
 
@@ -202,12 +218,12 @@ def test_position_reversal_call_to_put_across_separate_cycles(monkeypatch) -> No
 
     # Cycle 1: uptrend -> CALL entry.
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
-    auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
+    _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
     assert order_manager.account.side == "CALL"
 
     # Cycle 2: full uptrend window -> the CALL's target exit fires, flat again.
     patch_fetch(monkeypatch, UPTREND_60)
-    r2 = auto_trader.run_cycle(
+    r2 = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )
@@ -221,7 +237,7 @@ def test_position_reversal_call_to_put_across_separate_cycles(monkeypatch) -> No
     # duplicate of an earlier, unrelated event.
     reversal_downtrend = trending_df(60, start_price=300.0, step=-2.0, start="2026-09-23 11:20")
     patch_fetch(monkeypatch, reversal_downtrend.iloc[:14])
-    r3 = auto_trader.run_cycle(
+    r3 = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=10),
     )
@@ -242,11 +258,11 @@ def test_duplicate_signal_is_not_reprocessed_on_a_later_cycle(monkeypatch) -> No
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    r1 = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
+    r1 = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
     assert r1.order.status == "PLACED"
     assert order_manager.account.quantity == 1
 
-    r2 = auto_trader.run_cycle(
+    r2 = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5), total_open_positions=0,
     )
@@ -266,7 +282,7 @@ def test_duplicate_signal_is_not_reprocessed_even_with_a_higher_position_cap(mon
     order_manager = OrderManager()
 
     for i in range(4):
-        auto_trader.run_cycle(
+        _run_cycle(
             "nifty-50", "5m", risk_manager, order_manager, quantity=1,
             now=TRADING_HOURS_NOW + timedelta(minutes=5 * i), total_open_positions=0,
         )
@@ -282,13 +298,13 @@ def test_a_signal_blocked_by_risk_is_retried_on_a_later_cycle_not_dropped(monkey
     risk_manager = RiskManager()  # auto trading NOT enabled yet
     order_manager = OrderManager()
 
-    r1 = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
+    r1 = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
     assert r1.order is None
     assert r1.risk.reason == "Auto trading is disabled"
     assert order_manager.account.quantity == 0
 
     risk_manager.enable_auto_trading()
-    r2 = auto_trader.run_cycle(
+    r2 = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=5),
     )
@@ -327,7 +343,7 @@ def test_kill_switch_blocks_entry_via_run_cycle(monkeypatch) -> None:
     risk_manager.trip_kill_switch("Manual test halt")
     order_manager = OrderManager()
 
-    result = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
+    result = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
 
     assert result.order is None
     assert "kill switch" in result.risk.reason.lower()
@@ -347,7 +363,7 @@ def test_consecutive_loss_halt_blocks_entry_via_run_cycle(monkeypatch) -> None:
     assert risk_manager.state.consecutive_loss_halt is True
 
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
-    result = auto_trader.run_cycle(
+    result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=10),
     )
@@ -363,7 +379,7 @@ def test_daily_loss_limit_blocks_entry_via_run_cycle(monkeypatch) -> None:
     risk_manager.record_trade(realized_pnl=-150.0, now=TRADING_HOURS_NOW, is_exit=True)
 
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
-    result = auto_trader.run_cycle(
+    result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=10),
     )
@@ -382,7 +398,7 @@ def test_entry_blocked_before_trading_session_start(monkeypatch) -> None:
     order_manager = OrderManager()
     before_open = datetime(2026, 9, 23, 9, 0, tzinfo=IST)  # market opens 09:15
 
-    result = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=before_open)
+    result = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=before_open)
 
     assert result.order is None
     assert "trading hours" in result.risk.reason.lower()
@@ -395,7 +411,7 @@ def test_entry_blocked_after_trading_session_end(monkeypatch) -> None:
     order_manager = OrderManager()
     after_close = datetime(2026, 9, 23, 15, 45, tzinfo=IST)  # market closes 15:30
 
-    result = auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=after_close)
+    result = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=after_close)
 
     assert result.order is None
     assert "trading hours" in result.risk.reason.lower()
@@ -409,7 +425,7 @@ def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch)
     # A fresh entry (flat account) must be refused past the cutoff.
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
     flat_order_manager = OrderManager()
-    entry_attempt = auto_trader.run_cycle(
+    entry_attempt = _run_cycle(
         "nifty-50", "5m", risk_manager, flat_order_manager, quantity=1, now=past_cutoff
     )
     assert entry_attempt.order is None
@@ -422,7 +438,7 @@ def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch)
     held_account = SimulatedAccount(quantity=1, average_price=120.0, side="CALL", last_event_at=entry_timestamp)
     held_order_manager = OrderManager(held_account)
     patch_fetch(monkeypatch, UPTREND_60)
-    exit_attempt = auto_trader.run_cycle(
+    exit_attempt = _run_cycle(
         "nifty-50", "5m", risk_manager, held_order_manager, quantity=1,
         now=past_cutoff + timedelta(minutes=1), total_open_positions=1,
     )
@@ -455,7 +471,7 @@ def test_run_cycle_never_touches_a_broker_client(monkeypatch) -> None:
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
+    _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=TRADING_HOURS_NOW)
 
     assert not hasattr(order_manager, "client")
     assert not hasattr(order_manager.account, "client")

@@ -130,6 +130,18 @@ class AutoTradeAccountSnapshot(Base):
     # re-squaring-off an already-closed day or letting a stale ENTRY
     # reopen a position that was deliberately closed for the day.
     square_off_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # The instrument-master-validated OptionContract (Phase 5,
+    # algoedge.option_contract) this open position was resolved against -
+    # null while flat. Restoring these on startup is what lets an
+    # already-open position survive a restart WITHOUT re-resolving a
+    # contract (a re-resolution could legitimately pick a different one if
+    # the instrument master has since rolled to a new expiry).
+    contract_trading_symbol: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    contract_underlying: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    contract_right: Mapped[str | None] = mapped_column(String(4), nullable=True)
+    contract_strike: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    contract_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
+    contract_instrument_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class BrokerCredential(Base):

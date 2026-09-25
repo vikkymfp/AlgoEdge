@@ -9,7 +9,7 @@ generation (a flat series never produces an EMA/RSI/Supertrend setup, so
 pending strategy event alongside square-off.
 """
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pandas as pd
 import pytest
@@ -17,8 +17,10 @@ from sqlalchemy.exc import OperationalError
 
 from algoedge import auto_trader
 from algoedge.auto_trader import restore_account_state
+from algoedge.option_contract import OptionContract
 from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, RiskManager
+from fno_signals.strategy import TradeEvent
 
 TODAY = "2026-09-23"
 BEFORE_SQUARE_OFF = datetime(2026, 9, 23, 15, 15, tzinfo=IST)  # square_off_time default = 15:20
@@ -57,6 +59,20 @@ def patch_fetch(monkeypatch, df: pd.DataFrame) -> None:
     monkeypatch.setattr(auto_trader, "fetch_underlying_data", lambda *_a, **_kw: df)
 
 
+def _fake_resolve_contract(event: TradeEvent) -> OptionContract:
+    """Phase 5 stand-in - this file is about square-off timing, not
+    resolution itself, so entries resolve cleanly by default."""
+    return OptionContract(
+        trading_symbol=f"NIFTY26SEP{event.strike}{event.right}",
+        underlying="NIFTY", right=event.right, strike=event.strike, expiry=date(2026, 9, 30),
+    )
+
+
+def run_cycle(*args, **kwargs):
+    kwargs.setdefault("resolve_contract_fn", _fake_resolve_contract)
+    return auto_trader.run_cycle(*args, **kwargs)
+
+
 def open_call_account(quantity: int = 1, average_price: float = 100.0, **overrides) -> SimulatedAccount:
     return SimulatedAccount(quantity=quantity, average_price=average_price, side="CALL", **overrides)
 
@@ -75,7 +91,7 @@ def test_open_call_position_is_squared_off_after_the_configured_time(monkeypatch
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -95,7 +111,7 @@ def test_open_put_position_is_squared_off_after_the_configured_time(monkeypatch)
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -117,7 +133,7 @@ def test_already_flat_account_is_a_no_op_at_square_off_time(monkeypatch) -> None
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -136,7 +152,7 @@ def test_square_off_fires_exactly_at_the_configured_time(monkeypatch) -> None:
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AT_SQUARE_OFF
     )
 
@@ -151,7 +167,7 @@ def test_square_off_fires_after_the_configured_time(monkeypatch) -> None:
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=STILL_IN_SESSION_LATER
     )
 
@@ -165,7 +181,7 @@ def test_no_square_off_on_a_cycle_before_the_configured_time(monkeypatch) -> Non
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=BEFORE_SQUARE_OFF
     )
 
@@ -189,7 +205,7 @@ def test_restart_before_square_off_still_squares_off_the_restored_position(monke
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, flat_df(price=110.0))
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -210,7 +226,7 @@ def test_restart_after_square_off_does_not_square_off_again(monkeypatch) -> None
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, flat_df(price=110.0))
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=STILL_IN_SESSION_LATER
     )
 
@@ -229,14 +245,14 @@ def test_multiple_cycles_after_square_off_only_square_off_once(monkeypatch) -> N
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    first = auto_trader.run_cycle(
+    first = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
     assert first.event.kind == "SQUARE_OFF"
     trades_after_first = risk_manager.state.trades_today
 
     for i in range(3):
-        result = auto_trader.run_cycle(
+        result = run_cycle(
             "nifty-50", "5m", risk_manager, order_manager, quantity=1,
             now=AFTER_SQUARE_OFF + timedelta(minutes=5 * (i + 1)),
         )
@@ -262,7 +278,7 @@ def test_square_off_takes_precedence_over_a_pending_strategy_event(monkeypatch) 
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, uptrend)  # contains a later, unprocessed ENTRY_CALL
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -285,7 +301,7 @@ def test_stale_entry_after_square_off_cannot_reopen_the_position(monkeypatch) ->
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, uptrend)
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=STILL_IN_SESSION_LATER
     )
 
@@ -335,7 +351,7 @@ def test_square_off_still_fires_even_with_the_kill_switch_engaged(monkeypatch) -
     risk_manager.enable_auto_trading()
     risk_manager.trip_kill_switch("test halt")
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -349,7 +365,7 @@ def test_square_off_still_fires_even_when_auto_trading_is_disabled(monkeypatch) 
     order_manager = OrderManager(account)
     risk_manager = RiskManager()  # auto trading NOT enabled
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -369,7 +385,7 @@ def test_a_stray_entry_is_still_blocked_by_kill_switch_after_square_off(monkeypa
     risk_manager.trip_kill_switch("test halt")
     patch_fetch(monkeypatch, uptrend)
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=BEFORE_SQUARE_OFF
     )
 
@@ -385,7 +401,7 @@ def test_square_off_updates_daily_realized_pnl_via_risk_manager(monkeypatch) -> 
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    auto_trader.run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF)
+    run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF)
 
     assert risk_manager.state.realized_pnl_today == pytest.approx(8.0)
     assert risk_manager.state.trades_today == 1
@@ -404,7 +420,7 @@ def test_square_off_event_has_the_same_shape_as_a_strategy_exit_event(monkeypatc
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
 
-    result = auto_trader.run_cycle(
+    result = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=AFTER_SQUARE_OFF
     )
 
@@ -424,13 +440,13 @@ def test_ordinary_duplicate_signal_dedup_still_works_when_not_near_square_off(mo
     risk_manager.enable_auto_trading()
     patch_fetch(monkeypatch, uptrend.iloc[:17])
 
-    first = auto_trader.run_cycle(
+    first = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=datetime(2026, 9, 23, 10, 0, tzinfo=IST),
     )
     assert first.order.status == "PLACED"
 
-    second = auto_trader.run_cycle(
+    second = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=datetime(2026, 9, 23, 10, 5, tzinfo=IST),
     )
