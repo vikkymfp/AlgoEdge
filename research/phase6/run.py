@@ -286,6 +286,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--refresh", action="store_true")
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--out", type=Path, default=RESULTS_DIR)
+    parser.add_argument("--csv", type=Path, default=None,
+                        help="run on this CSV (e.g. data/phase6_nifty50_5m.csv from download_dhan) "
+                             "instead of fetching; requires exactly one --indices value")
     parser.add_argument("--null", type=int, default=0, metavar="SEEDS",
                         help="only run the random-walk null benchmark with this many seeds")
     args = parser.parse_args(argv)
@@ -298,15 +301,22 @@ def main(argv: list[str] | None = None) -> int:
         print(f"wrote {path}")
         return 0
 
+    if args.csv is not None and len(args.indices) != 1:
+        parser.error("--csv requires exactly one --indices value")
+
     runs = []
     for index_id in args.indices:
-        if args.synthetic:
+        if args.csv is not None:
+            df = data_mod.load_csv(args.csv)
+        elif args.synthetic:
             df = synthetic_frame(seed=list(data_mod.INDEX_CHOICE).index(index_id) + 1)
         else:
             df = data_mod.load(index_id, args.interval, refresh=args.refresh)
         runs.append(run_index(index_id, df, args.interval, data_mod.INDEX_CHOICE[index_id]))
 
     label = f"{'synthetic' if args.synthetic else 'phase6'}_{args.interval}"
+    if args.csv is not None:
+        label = f"{args.csv.stem}_{args.indices[0]}"
     args.out.mkdir(parents=True, exist_ok=True)
     body = "".join(render(r, args.interval, args.synthetic) for r in runs)
     (args.out / f"{label}.md").write_text(f"# Phase 6 research results - {label}\n\n{body}")

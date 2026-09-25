@@ -54,9 +54,22 @@ def save_csv(df: pd.DataFrame, path: Path) -> None:
     df.to_csv(path, index_label="Datetime")
 
 
+# Clean NIFTY 50 5m dataset written by research.phase6.download_dhan
+# (lowercase schema: datetime,open,high,low,close,volume).
+DHAN_NIFTY50_5M = DEFAULT_CACHE_DIR / "phase6_nifty50_5m.csv"
+
+
 def load_csv(path: Path) -> pd.DataFrame:
+    """Loads either Phase 6 CSV layout - the yfinance cache
+    (Datetime,Open,High,Low,Close,Volume) or the Dhan dataset
+    (datetime,open,high,low,close,volume) - into the OHLCV frame the
+    canonical strategy consumes, indexed by IST timestamps."""
     df = pd.read_csv(path)
-    index = pd.to_datetime(df.pop(df.columns[0]), utc=True).dt.tz_convert(IST)
+    by_lower = {c.strip().lower(): c for c in df.columns}
+    time_column = by_lower.get("datetime", df.columns[0])
+    index = pd.to_datetime(df.pop(time_column), utc=True).dt.tz_convert(IST)
+    df = df.rename(columns={by_lower[k]: k.capitalize() for k in ("open", "high", "low", "close", "volume")
+                            if k in by_lower})
     df.index = pd.DatetimeIndex(index, name="Datetime")
     return df[["Open", "High", "Low", "Close", "Volume"]].astype(float)
 
