@@ -241,8 +241,12 @@ function renderPositionsBrokerCard() {
     ['Session status', status.sessionStatus || '—'],
     ['Active segments', (profile.activeSegments || []).join(', ') || '—'],
     ['Holdings', (account.holdings || []).length],
-    ['Available margin (equity)', margin.equity_margin_details?.clear_cash != null ? money(margin.equity_margin_details.clear_cash) : '—'],
-    ['Available margin (F&O)', margin.fno_margin_details?.clear_cash != null ? money(margin.fno_margin_details.clear_cash) : '—'],
+    // Verified Groww margin structure: clear_cash exists only at the top
+    // level; per-segment balances live inside *_margin_details. Equity uses
+    // the CNC (delivery) balance - AlgoEdge's cash product - and F&O the
+    // option-buy balance, since fno_signals only ever buys options.
+    ['Available balance (equity · CNC)', formatMarginValue(margin.equity_margin_details?.cnc_balance_available)],
+    ['Available balance (F&O · option buy)', formatMarginValue(margin.fno_margin_details?.option_buy_balance_available)],
     ['API key', status.apiKeyMasked || 'Not configured'],
     ['Last error', status.lastError || 'None'],
   ].map(([label, value]) => `<div class="account-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
@@ -1238,8 +1242,10 @@ function renderOptionMarket(payload) {
   renderOptionLeg('Call', payload.call, payload.signal?.call);
   renderOptionLeg('Put', payload.put, payload.signal?.put);
 
-  const availableMargin = lastAccountPayload?.margin?.equity_margin_details?.clear_cash;
-  document.querySelector('#optAvailableMargin').textContent = availableMargin == null ? '—' : money(availableMargin);
+  // This panel is the context for fno_signals' option BUY orders, so the
+  // relevant verified Groww field is the F&O option-buy balance.
+  document.querySelector('#optAvailableMargin').textContent =
+    formatMarginValue(lastAccountPayload?.margin?.fno_margin_details?.option_buy_balance_available);
   document.querySelector('#optMaxLots').textContent = 'Unavailable — requires live premium to compute margin-based lot sizing';
 }
 

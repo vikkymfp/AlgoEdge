@@ -10,6 +10,38 @@ def make_service() -> LiveGridService:
     return LiveGridService(broker=None, settings=None)  # type: ignore[arg-type]
 
 
+# Field names exactly as in a real /api/account -> margin response
+# (verified against the running dashboard); values are synthetic. Note
+# clear_cash exists only at the top level, never inside *_margin_details.
+VERIFIED_MARGIN = {
+    "clear_cash": 16000.25,
+    "fno_margin_details": {
+        "net_fno_margin_used": 1500.0,
+        "span_margin_used": 1000.0,
+        "exposure_margin_used": 500.0,
+        "future_balance_available": 14000.0,
+        "option_buy_balance_available": 12000.5,
+        "option_sell_balance_available": 9000.0,
+    },
+    "equity_margin_details": {
+        "net_equity_margin_used": 800.0,
+        "cnc_margin_used": 600.0,
+        "mis_margin_used": 200.0,
+        "cnc_balance_available": 15200.25,
+        "mis_balance_available": 30400.5,
+    },
+    "commodity_margin_details": {
+        "commodity_span_margin": 0.0,
+        "commodity_exposure_margin": 0.0,
+        "commodity_tender_margin": 0.0,
+        "commodity_special_margin": 0.0,
+        "commodity_additional_margin": 0.0,
+        "commodity_unrealised_m2m": 0.0,
+        "commodity_realised_m2m": 0.0,
+    },
+}
+
+
 class FakeGrowwClient:
     """A minimal stand-in for growwapi.GrowwAPI exposing only the methods
     account_snapshot() actually calls, each independently configurable to
@@ -38,7 +70,7 @@ class FakeGrowwClient:
         return self._call_or_raise("positions", {"positions": []})
 
     def get_available_margin_details(self):
-        return self._call_or_raise("margin", {"equity_margin_details": {"clear_cash": 100000.0}})
+        return self._call_or_raise("margin", VERIFIED_MARGIN)
 
     def get_order_list(self, segment=None, page=0, page_size=25):
         key = "cash_orders" if segment == "CASH" else "fno_orders"
@@ -55,6 +87,16 @@ class FakeBroker:
 
 def make_service_with_client(client: FakeGrowwClient) -> LiveGridService:
     return LiveGridService(broker=FakeBroker(client), settings=None)  # type: ignore[arg-type]
+
+
+def test_account_snapshot_passes_the_verified_margin_structure_through_unchanged() -> None:
+    service = make_service_with_client(FakeGrowwClient())
+
+    margin = service.account_snapshot()["margin"]
+
+    assert margin == VERIFIED_MARGIN
+    assert "clear_cash" not in margin["equity_margin_details"]
+    assert "clear_cash" not in margin["fno_margin_details"]
 
 
 def test_account_snapshot_reports_connected_when_everything_succeeds() -> None:

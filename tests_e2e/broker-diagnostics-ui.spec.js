@@ -24,23 +24,43 @@ const BROKER_STATUS = {
   capabilities: { market_data: { status: 'UNAVAILABLE', error: 'Access forbidden for this request.' } },
 };
 
+// Field names exactly as in a real /api/account -> margin response
+// (verified against the running dashboard); values are synthetic and all
+// distinct, so a test can tell which field a UI element actually reads.
+// clear_cash exists only at the top level, never inside *_margin_details.
 const MARGIN = {
   clear_cash: 125000.5,
-  net_margin_used: 2300,
-  brokerage_and_charges: 45.75,
-  collateral_used: 0,
-  collateral_available: 50000,
-  adhoc_margin: 0,
-  fno_margin_details: { net_fno_margin_used: 1500, span_margin_used: 1000, option_buy_balance_available: 98000 },
-  equity_margin_details: { net_equity_margin_used: 800, cnc_balance_available: 124000 },
-  commodity_margin_details: { commodity_balance_available: 0 },
+  fno_margin_details: {
+    net_fno_margin_used: 1500,
+    span_margin_used: 1000,
+    exposure_margin_used: 500,
+    future_balance_available: 14000,
+    option_buy_balance_available: 98000,
+    option_sell_balance_available: 9000,
+  },
+  equity_margin_details: {
+    net_equity_margin_used: 800,
+    cnc_margin_used: 600,
+    mis_margin_used: 200,
+    cnc_balance_available: 124000,
+    mis_balance_available: 30400.5,
+  },
+  commodity_margin_details: {
+    commodity_span_margin: 0,
+    commodity_exposure_margin: 0,
+    commodity_tender_margin: 0,
+    commodity_special_margin: 0,
+    commodity_additional_margin: 0,
+    commodity_unrealised_m2m: 0,
+    commodity_realised_m2m: 0,
+  },
 };
 
-function accountPayload({ marketData }) {
+function accountPayload({ marketData, margin = MARGIN }) {
   return {
     source: 'LIVE BROKER DATA',
     profile: { connected: true, error: null, activeSegments: ['CASH', 'FNO'] },
-    margin: MARGIN, marginStatus: { available: true, error: null },
+    margin, marginStatus: { available: true, error: null },
     holdings: [], holdingsStatus: { available: true, error: null },
     positions: [], positionsStatus: { available: true, error: null },
     orders: [], ordersStatus: { available: true, error: null },
@@ -49,10 +69,10 @@ function accountPayload({ marketData }) {
   };
 }
 
-async function openDiagnostics(page, marketData) {
+async function openDiagnostics(page, marketData, margin = MARGIN) {
   await page.route('**/lightweight-charts*', (route) => route.fulfill({ contentType: 'text/javascript', body: CHART_LIBRARY_STUB }));
   await page.route('**/api/broker/status', (route) => route.fulfill({ json: BROKER_STATUS }));
-  await page.route('**/api/account', (route) => route.fulfill({ json: accountPayload({ marketData }) }));
+  await page.route('**/api/account', (route) => route.fulfill({ json: accountPayload({ marketData, margin }) }));
   await page.goto('/');
   await page.click('a[href="#account-api"]');
   await expect(page.locator('#diagApiConnection strong')).toHaveText('CONNECTED');
@@ -135,5 +155,42 @@ test.describe('Broker Diagnostics UI', () => {
     await expect(page.locator('#marginData .snapshot-note')).toHaveText(
       `Broker snapshot fetched at ${fetchedAt}. Values don't update live — reload the page to fetch a new snapshot.`,
     );
+  });
+
+  test('margin fields are read from their verified locations in every panel', async ({ page }) => {
+    await page.route('**/api/auto-trading/option-context/**', (route) => route.fulfill({
+      json: { underlyingName: 'NIFTY 50', spot: null, atmStrike: null, call: { available: false, reason: 'x' }, put: { available: false, reason: 'x' }, signal: null },
+    }));
+    await openDiagnostics(page, FORBIDDEN_MARKET_DATA);
+
+    // Funds & Margin: account-level clear_cash, and the verified segment fields.
+    await expect(page.locator('#marginData .margin-metrics dd').first()).toHaveText('₹1,25,000.50');
+    const segmentText = await page.locator('#marginData .margin-segments').innerText();
+    for (const label of ['Option buy balance available', 'CNC balance available', 'MIS balance available', 'Commodity span margin']) {
+      expect(segmentText).toContain(label);
+    }
+
+    // Positions broker card: equity CNC balance and F&O option-buy balance -
+    // never clear_cash from inside a segment (it doesn't exist there).
+    const card = page.locator('#posBrokerDetailsGrid');
+    await expect(card).toContainText('Available balance (equity · CNC)₹1,24,000.00');
+    await expect(card).toContainText('Available balance (F&O · option buy)₹98,000.00');
+
+    // Option panel (context for fno_signals' option BUY orders).
+    await page.evaluate(() => loadOptionMarket());
+    await expect(page.locator('#optAvailableMargin')).toHaveText('₹98,000.00');
+  });
+
+  test('a missing segment balance shows "—", never clear_cash or a guessed number', async ({ page }) => {
+    const { option_buy_balance_available: _omit, ...fnoWithoutOptionBuy } = MARGIN.fno_margin_details;
+    const margin = { ...MARGIN, fno_margin_details: fnoWithoutOptionBuy };
+    await page.route('**/api/auto-trading/option-context/**', (route) => route.fulfill({
+      json: { underlyingName: 'NIFTY 50', spot: null, atmStrike: null, call: { available: false, reason: 'x' }, put: { available: false, reason: 'x' }, signal: null },
+    }));
+    await openDiagnostics(page, FORBIDDEN_MARKET_DATA, margin);
+
+    await expect(page.locator('#posBrokerDetailsGrid')).toContainText('Available balance (F&O · option buy)—');
+    await page.evaluate(() => loadOptionMarket());
+    await expect(page.locator('#optAvailableMargin')).toHaveText('—');
   });
 });
