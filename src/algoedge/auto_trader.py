@@ -82,6 +82,18 @@ def run_cycle(
 
     event = events[-1]
 
+    # fno_signals.strategy.run() recomputes the ENTIRE window from scratch
+    # every call - it has no memory of what a previous cycle already acted
+    # on. Without this check, the same already-filled event (the
+    # deterministic "latest event" in an unchanged/overlapping window)
+    # would be re-submitted to the Order Manager on every subsequent
+    # cycle, silently averaging more quantity into an already-open
+    # position. account.last_event_at is the high-water mark of the last
+    # event actually PLACED (see order_manager.py) - anything not newer
+    # than it is a duplicate/already-processed signal, not a new one.
+    if account.last_event_at is not None and event.timestamp <= account.last_event_at:
+        return AutoTradeCycleResult(event, RiskDecision(False, "Signal already processed (duplicate)"), None)
+
     # RiskManager.check()/record_trade() only understand BUY/SELL (kept
     # unchanged, per the canonical-strategy unification's own scope) - an
     # entry (CALL or PUT) always "opens"/uses capital like a BUY, an exit
@@ -98,4 +110,9 @@ def run_cycle(
     if order_result.status == "PLACED":
         is_exit = event.kind in _EXIT_KINDS
         risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
+        # Deliberately only advanced on a successful fill, not merely on
+        # having "seen" the event - a signal blocked by a risk gate this
+        # cycle (e.g. auto trading briefly disabled) must still be
+        # eligible to fire on a later cycle once the gate reopens.
+        account.last_event_at = event.timestamp
     return AutoTradeCycleResult(event, decision, order_result)

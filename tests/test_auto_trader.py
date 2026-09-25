@@ -27,25 +27,25 @@ def make_df(n: int = 5) -> pd.DataFrame:
     )
 
 
-def call_entry_event(price: float = 100.0) -> TradeEvent:
+def call_entry_event(price: float = 100.0, timestamp: str = "2026-09-23 10:00") -> TradeEvent:
     return TradeEvent(
-        timestamp=pd.Timestamp("2026-09-23 10:00", tz="Asia/Kolkata"),
+        timestamp=pd.Timestamp(timestamp, tz="Asia/Kolkata"),
         kind="ENTRY_CALL", underlying_price=price, option_symbol="NIFTY 50 100 CE",
         stop_loss=price - 15.0, target=price + 45.0, exit_level=None, strike=100, right="CE",
     )
 
 
-def put_entry_event(price: float = 100.0) -> TradeEvent:
+def put_entry_event(price: float = 100.0, timestamp: str = "2026-09-23 10:00") -> TradeEvent:
     return TradeEvent(
-        timestamp=pd.Timestamp("2026-09-23 10:00", tz="Asia/Kolkata"),
+        timestamp=pd.Timestamp(timestamp, tz="Asia/Kolkata"),
         kind="ENTRY_PUT", underlying_price=price, option_symbol="NIFTY 50 100 PE",
         stop_loss=price + 15.0, target=price - 45.0, exit_level=None, strike=100, right="PE",
     )
 
 
-def exit_event(kind: str, price: float) -> TradeEvent:
+def exit_event(kind: str, price: float, timestamp: str = "2026-09-23 10:05") -> TradeEvent:
     return TradeEvent(
-        timestamp=pd.Timestamp("2026-09-23 10:05", tz="Asia/Kolkata"),
+        timestamp=pd.Timestamp(timestamp, tz="Asia/Kolkata"),
         kind=kind, underlying_price=price, option_symbol=None,
         stop_loss=None, target=None, exit_level=price,
     )
@@ -234,7 +234,7 @@ def test_a_losing_exit_starts_a_cooldown_that_blocks_the_next_entry(monkeypatch)
     assert exit_result.order.status == "PLACED"
     assert risk_manager.state.last_exit_at == TRADING_HOURS_NOW
 
-    patch_data_and_events(monkeypatch, [call_entry_event(90.0)])
+    patch_data_and_events(monkeypatch, [call_entry_event(90.0, timestamp="2026-09-23 10:10")])
     reentry_result = auto_trader.run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
         now=TRADING_HOURS_NOW + timedelta(minutes=1),

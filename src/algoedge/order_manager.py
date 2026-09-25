@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 logger = logging.getLogger("algoedge.orders")
 
@@ -26,6 +27,19 @@ class SimulatedAccount:
     # Set only by fill_event() (the CALL/PUT path) — stays None for the
     # legacy fill() BUY/SELL path below, which is always long-only.
     side: str | None = None  # "CALL" | "PUT" | None
+    # A monotonically-increasing high-water mark: the timestamp of the last
+    # fno_signals.strategy TradeEvent actually placed against this account.
+    # A canonical-strategy walk-forward window is fully recomputed from
+    # scratch on every call (fno_signals.strategy.run() has no memory
+    # across calls), so a caller that re-fetches an overlapping window
+    # every cycle would otherwise see the exact same already-acted-upon
+    # event as "the latest event" over and over. Comparing against this
+    # field is what lets algoedge.auto_trader.run_cycle() tell "the same
+    # signal I already filled" apart from "a genuinely new one" - see
+    # tests/test_auto_trader.py's duplicate-signal tests. Any orderable
+    # timestamp works here; kept untyped to avoid a pandas dependency in
+    # this otherwise strategy-agnostic module.
+    last_event_at: Any | None = None
 
     def fill(self, action: str, price: float, quantity: int, index_id: str | None = None) -> float:
         """Executes a simulated fill and returns realized P&L (0.0 for entries)."""
