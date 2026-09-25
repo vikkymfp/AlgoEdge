@@ -292,7 +292,10 @@ def _parse_end(value: str) -> pd.Timestamp:
     next midnight); anything with a time component is kept exactly."""
     ts = pd.Timestamp(value)
     if _DATE_ONLY.fullmatch(value.strip()):
-        return ts + pd.Timedelta(hours=23, minutes=59, seconds=59)
+        # Set the clock fields directly (a date-only value is always 00:00:00):
+        # no Timedelta/timedelta64 arithmetic, so no NumPy 'generic' unit
+        # DeprecationWarning on any pandas/NumPy combination.
+        return ts.replace(hour=23, minute=59, second=59)
     return ts
 
 

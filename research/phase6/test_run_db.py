@@ -257,3 +257,16 @@ def test_parse_end_unit() -> None:
     assert run_mod._parse_end("2015-12-31T00:00:00") == pd.Timestamp("2015-12-31 00:00")
     aware = run_mod._parse_end("2015-12-31T09:55:00Z")  # explicit, timezone-aware: kept exactly
     assert aware == pd.Timestamp("2015-12-31 09:55", tz="UTC")
+
+
+def test_parse_end_emits_no_deprecation_warning() -> None:
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any DeprecationWarning (e.g. NumPy 'generic' timedelta unit) fails
+        result = run_mod._parse_end("2015-12-31")
+        exact = run_mod._parse_end("2015-12-31 15:25")
+    assert result == pd.Timestamp("2015-12-31 23:59:59")
+    assert (result.hour, result.minute, result.second, result.microsecond, result.nanosecond) == (23, 59, 59, 0, 0)
+    assert result.tzinfo is None
+    assert exact == pd.Timestamp("2015-12-31 15:25")
