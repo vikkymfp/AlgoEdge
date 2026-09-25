@@ -6,12 +6,22 @@ from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
 
+# The unit realized P&L - and therefore daily_loss_limit - is measured in.
+# Paper Auto Trade fills at the underlying index's price, never an option
+# premium (see algoedge.order_manager.SimulatedAccount.fill_event), so its
+# realized P&L is (exit - entry) underlying price x quantity: index points,
+# not rupees.
+PNL_UNIT_UNDERLYING_POINTS = "UNDERLYING_POINTS"
+
 
 @dataclass(frozen=True)
 class RiskLimits:
     """Configurable risk limits, per the blueprint's Risk Manager spec."""
 
+    # Expressed in daily_loss_limit_unit, the same unit record_trade()'s
+    # realized_pnl is accumulated in - never assumed to be rupees.
     daily_loss_limit: float = 5000.0
+    daily_loss_limit_unit: str = PNL_UNIT_UNDERLYING_POINTS
     max_trades_per_day: int = 10
     max_open_positions: int = 1
     max_quantity: int = 50
@@ -158,9 +168,12 @@ class RiskManager:
             cooldown_until = self.state.last_exit_at + timedelta(minutes=self.limits.cooldown_minutes)
             if now < cooldown_until:
                 return RiskDecision(False, f"Cooldown active until {cooldown_until.time().isoformat()}")
-        if self.state.trades_today >= self.limits.max_trades_per_day:
+        # Both gate taking on NEW risk only - a SELL closes an existing
+        # position's SL/target exit, which must never be trapped open by
+        # the very loss/activity it is part of limiting.
+        if action == "BUY" and self.state.trades_today >= self.limits.max_trades_per_day:
             return RiskDecision(False, "Max trades per day reached")
-        if self.state.realized_pnl_today <= -abs(self.limits.daily_loss_limit):
+        if action == "BUY" and self.state.realized_pnl_today <= -abs(self.limits.daily_loss_limit):
             return RiskDecision(False, "Daily loss limit reached")
         if quantity <= 0:
             return RiskDecision(False, "Quantity must be positive")

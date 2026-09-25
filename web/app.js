@@ -53,6 +53,13 @@ const money = (value) => value == null ? '—' : `₹${Math.abs(value).toLocaleS
 const signedMoney = (value) => value == null ? '—' : value >= 0 ? `+${money(value)}` : `-${money(value)}`;
 const signedPercent = (value) => `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
 const number = (value) => value.toLocaleString('en-IN');
+// Auto Trade's paper P&L and daily loss limit are measured in underlying
+// index points (see RiskLimits.daily_loss_limit_unit), never rupees - so
+// they must never be rendered with money()'s ₹ sign.
+const RISK_UNIT_LABELS = { UNDERLYING_POINTS: 'index pts' };
+const riskAmount = (value, unit) => value == null ? '—'
+  : `${Math.abs(value).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${RISK_UNIT_LABELS[unit] || unit || ''}`.trim();
+const signedRiskAmount = (value, unit) => value == null ? '—' : `${value >= 0 ? '+' : '-'}${riskAmount(value, unit)}`;
 
 // Decouples the 1s UI heartbeat (just re-renders "Xs ago" from a timestamp)
 // from actually hitting Groww: broker-data fetches (positions/orders/grids)
@@ -1304,9 +1311,9 @@ function renderAutoTradingStatus(status) {
   document.querySelector('#autoLossHaltResetButton').hidden = !status.consecutiveLossHalt;
 
   document.querySelector('#autoTradesToday').textContent = status.tradesToday;
-  document.querySelector('#autoRealizedPnl').textContent = signedMoney(status.realizedPnlToday);
+  document.querySelector('#autoRealizedPnl').textContent = signedRiskAmount(status.realizedPnlToday, status.realizedPnlTodayUnit);
   document.querySelector('#autoMaxOpenPositions').textContent = number(status.limits.maxOpenPositions);
-  document.querySelector('#autoDailyLossLimit').textContent = money(status.limits.dailyLossLimit);
+  document.querySelector('#autoDailyLossLimit').textContent = riskAmount(status.limits.dailyLossLimit, status.limits.dailyLossLimitUnit);
   document.querySelector('#autoEntryCutoff').textContent = status.limits.entryCutoff || '—';
   document.querySelector('#autoSquareOffTime').textContent = status.limits.squareOffTime || '—';
   document.querySelector('#autoCooldownMinutes').textContent = `${status.limits.cooldownMinutes} min`;

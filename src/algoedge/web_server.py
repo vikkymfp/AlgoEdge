@@ -307,11 +307,13 @@ def auto_trading_status() -> dict:
         "killSwitchReason": state.kill_switch_reason,
         "tradesToday": state.trades_today,
         "realizedPnlToday": state.realized_pnl_today,
+        "realizedPnlTodayUnit": risk_manager.limits.daily_loss_limit_unit,
         "consecutiveLosses": state.consecutive_losses,
         "consecutiveLossHalt": state.consecutive_loss_halt,
         "lastExitAt": state.last_exit_at,
         "limits": {
             "dailyLossLimit": risk_manager.limits.daily_loss_limit,
+            "dailyLossLimitUnit": risk_manager.limits.daily_loss_limit_unit,
             "maxTradesPerDay": risk_manager.limits.max_trades_per_day,
             "maxOpenPositions": risk_manager.limits.max_open_positions,
             "maxQuantity": risk_manager.limits.max_quantity,
