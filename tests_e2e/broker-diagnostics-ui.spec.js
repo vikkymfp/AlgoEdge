@@ -30,6 +30,11 @@ const BROKER_STATUS = {
 // clear_cash exists only at the top level, never inside *_margin_details.
 const MARGIN = {
   clear_cash: 125000.5,
+  net_margin_used: 2300,
+  brokerage_and_charges: 45.75,
+  collateral_used: 100,
+  collateral_available: 50000,
+  adhoc_margin: 0,
   fno_margin_details: {
     net_fno_margin_used: 1500,
     span_margin_used: 1000,
@@ -163,8 +168,10 @@ test.describe('Broker Diagnostics UI', () => {
     }));
     await openDiagnostics(page, FORBIDDEN_MARKET_DATA);
 
-    // Funds & Margin: account-level clear_cash, and the verified segment fields.
-    await expect(page.locator('#marginData .margin-metrics dd').first()).toHaveText('₹1,25,000.50');
+    // Funds & Margin: the four verified top-level fields, in order, and the
+    // verified segment fields.
+    expect(await page.locator('#marginData .margin-metrics dd').allInnerTexts())
+      .toEqual(['₹1,25,000.50', '₹2,300.00', '₹50,000.00', '₹45.75']);
     const segmentText = await page.locator('#marginData .margin-segments').innerText();
     for (const label of ['Option buy balance available', 'CNC balance available', 'MIS balance available', 'Commodity span margin']) {
       expect(segmentText).toContain(label);

@@ -15,6 +15,11 @@ def make_service() -> LiveGridService:
 # clear_cash exists only at the top level, never inside *_margin_details.
 VERIFIED_MARGIN = {
     "clear_cash": 16000.25,
+    "net_margin_used": 2300.0,
+    "brokerage_and_charges": 45.75,
+    "collateral_used": 100.0,
+    "collateral_available": 5000.0,
+    "adhoc_margin": 0.0,
     "fno_margin_details": {
         "net_fno_margin_used": 1500.0,
         "span_margin_used": 1000.0,
