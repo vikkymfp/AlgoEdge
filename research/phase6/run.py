@@ -3,6 +3,7 @@
     PYTHONPATH=src:. python -m research.phase6.run --interval 5m
     PYTHONPATH=src:. python -m research.phase6.run --interval 5m --refresh   # re-download
     PYTHONPATH=src:. python -m research.phase6.run --synthetic               # pipeline check only
+    PYTHONPATH=src:. python -m research.phase6.run --db --indices nifty-50   # SQL Server historical_candles
 
 Writes research/phase6/results/<label>.md and .json. Never touches the
 canonical strategy, the broker, or any order path.
@@ -13,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from dataclasses import asdict
 from pathlib import Path
 
@@ -23,6 +25,7 @@ from algoedge.backtest import compute_regime_labels, pair_trades
 from fno_signals.config import INDEX_MAP, strategy_config_for
 from fno_signals.strategy import drop_invalid_bars
 from fno_signals.strategy import run as canonical_run
+from research.phase6 import candle_source, historical_db
 from research.phase6 import data as data_mod
 from research.phase6.engine import (
     Summary,
@@ -291,7 +294,26 @@ def main(argv: list[str] | None = None) -> int:
                              "instead of fetching; requires exactly one --indices value")
     parser.add_argument("--null", type=int, default=0, metavar="SEEDS",
                         help="only run the random-walk null benchmark with this many seeds")
+    parser.add_argument("--db", action="store_true",
+                        help="read candles from the research historical_candles table (SQL Server, "
+                             "ALGOEDGE_DB_* settings); each contiguous segment is run separately")
+    parser.add_argument("--db-source", default="master_5min.csv",
+                        help="historical_candles.source to read with --db (default: master_5min.csv)")
+    parser.add_argument("--start", type=pd.Timestamp, default=None,
+                        help="with --db: first bar_start to read (inclusive, IST)")
+    parser.add_argument("--end", type=pd.Timestamp, default=None,
+                        help="with --db: last bar_start to read (inclusive, IST)")
     args = parser.parse_args(argv)
+
+    if args.db:
+        conflicting = [flag for flag, used in (("--csv", args.csv is not None), ("--synthetic", args.synthetic),
+                                               ("--null", bool(args.null))) if used]
+        if conflicting:
+            parser.error(f"--db cannot be combined with {', '.join(conflicting)}")
+        if len(args.indices) != 1:
+            parser.error("--db requires exactly one --indices value")
+    elif args.start is not None or args.end is not None:
+        parser.error("--start/--end are only supported with --db")
 
     if args.null:
         args.out.mkdir(parents=True, exist_ok=True)
@@ -303,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.csv is not None and len(args.indices) != 1:
         parser.error("--csv requires exactly one --indices value")
+
+    if args.db:
+        return _run_db(args)
 
     runs = []
     for index_id in args.indices:
@@ -317,6 +342,38 @@ def main(argv: list[str] | None = None) -> int:
     label = f"{'synthetic' if args.synthetic else 'phase6'}_{args.interval}"
     if args.csv is not None:
         label = f"{args.csv.stem}_{args.indices[0]}"
+    _write_reports(args, label, runs)
+    return 0
+
+
+def _run_db(args) -> int:
+    """--db: read historical_candles through the read-only candle source and
+    run the unchanged run_index() on each contiguous segment on its own. The
+    whole DB frame is never passed to run_index(): a data hole (e.g. the
+    excluded 2015-06-22..2015-11-13 window) must not be bridged as if the bars
+    on either side were adjacent. Segments are reported separately; no
+    cross-segment aggregate is computed."""
+    index_id = args.indices[0]
+    engine = historical_db.research_engine()
+    segments = candle_source.load_db_segments(
+        engine, index_id=index_id, timeframe=args.interval, start=args.start, end=args.end,
+        source=args.db_source,
+    )
+    if not segments:
+        print(f"No candles in historical_candles for index_id={index_id!r}, timeframe={args.interval!r}, "
+              f"source={args.db_source!r}, start={args.start}, end={args.end}", file=sys.stderr)
+        return 1
+    runs = []
+    for number, segment in enumerate(segments, start=1):
+        first, last = segment.index[0], segment.index[-1]
+        label = f"{index_id} seg{number} {first:%Y-%m-%d %H:%M}..{last:%Y-%m-%d %H:%M}"
+        print(f"{label}: {len(segment)} bars")
+        runs.append(run_index(label, segment, args.interval, data_mod.INDEX_CHOICE[index_id]))
+    _write_reports(args, f"db_{Path(args.db_source).stem}_{index_id}", runs)
+    return 0
+
+
+def _write_reports(args, label: str, runs: list[dict]) -> None:
     args.out.mkdir(parents=True, exist_ok=True)
     body = "".join(render(r, args.interval, args.synthetic) for r in runs)
     (args.out / f"{label}.md").write_text(f"# Phase 6 research results - {label}\n\n{body}")
@@ -328,7 +385,6 @@ def main(argv: list[str] | None = None) -> int:
         indent=1, default=str,
     ))
     print(f"wrote {args.out / label}.md / .json")
-    return 0
 
 
 if __name__ == "__main__":
