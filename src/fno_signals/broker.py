@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import time
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -11,6 +10,8 @@ import pandas as pd
 from growwapi import GrowwAPI
 from growwapi.groww.exceptions import GrowwAPIException
 
+from algoedge.config import Settings, get_settings
+from algoedge.token_service import BrokerNotConnectedError, TokenService
 from fno_signals.config import IndexConfig
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -65,38 +66,23 @@ class ContractNotFoundError(RuntimeError):
     """
 
 
-def generate_daily_session() -> GrowwAPI:
+def generate_daily_session(settings: Settings | None = None) -> GrowwAPI:
     """Authenticates against the Groww API and verifies the session with a
     real API call before returning the client.
 
-    Uses the same ALGOEDGE_GROWW_* environment variables as the main
-    AlgoEdge dashboard (ALGOEDGE_GROWW_ACCESS_TOKEN, or both
-    ALGOEDGE_GROWW_API_KEY and ALGOEDGE_GROWW_API_SECRET) rather than a
-    separate credential set. Raises GrowwSessionError on any failure —
-    callers must terminate rather than proceed with an unverified session.
+    Delegates entirely to algoedge's TokenService - the same credential
+    resolution the web dashboard uses (ALGOEDGE_GROWW_* settings as the
+    initial/fallback values, overridden by any encrypted credentials saved
+    from API Management) - so an update made in the dashboard applies here
+    too. Callers must have run db.init_db() first for stored credentials to
+    be visible. Raises GrowwSessionError on any failure - callers must
+    terminate rather than proceed with an unverified session.
     """
-    access_token = os.environ.get("ALGOEDGE_GROWW_ACCESS_TOKEN")
-    api_key = os.environ.get("ALGOEDGE_GROWW_API_KEY")
-    api_secret = os.environ.get("ALGOEDGE_GROWW_API_SECRET")
-
+    token_service = TokenService(settings or get_settings())
     try:
-        if access_token:
-            token = access_token
-        elif api_key and api_secret:
-            token = GrowwAPI.get_access_token(api_key=api_key, secret=api_secret)
-        else:
-            raise GrowwSessionError(
-                "Set ALGOEDGE_GROWW_ACCESS_TOKEN or both ALGOEDGE_GROWW_API_KEY "
-                "and ALGOEDGE_GROWW_API_SECRET to trade live."
-            )
-        client = GrowwAPI(token)
-        profile = client.get_user_profile()
-        if not isinstance(profile, dict):
-            raise GrowwSessionError("Groww session verification returned an unexpected response")
-    except GrowwAPIException as error:
-        raise GrowwSessionError(f"Groww authentication failed: {error}") from error
-
-    return client
+        return token_service.effective_client()
+    except BrokerNotConnectedError as error:
+        raise GrowwSessionError(str(error)) from error
 
 
 @dataclass(frozen=True)

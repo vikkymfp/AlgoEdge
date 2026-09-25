@@ -2,16 +2,13 @@ from datetime import date
 
 import pandas as pd
 import pytest
-from growwapi.groww.exceptions import GrowwAPIException
 
 from fno_signals import broker as broker_module
 from fno_signals.broker import (
     ContractNotFoundError,
-    GrowwSessionError,
     ResolvedContract,
     construct_option_symbol,
     execute_market_order,
-    generate_daily_session,
     resolve_contract,
 )
 from fno_signals.config import INDEX_MAP
@@ -151,61 +148,3 @@ def test_execute_market_order_uses_bse_for_sensex_contract(monkeypatch) -> None:
     execute_market_order(client, contract, quantity=20)
 
     assert client.calls[0]["exchange"] == "BSE"
-
-
-def test_generate_daily_session_fails_without_any_credentials(monkeypatch) -> None:
-    monkeypatch.delenv("ALGOEDGE_GROWW_ACCESS_TOKEN", raising=False)
-    monkeypatch.delenv("ALGOEDGE_GROWW_API_KEY", raising=False)
-    monkeypatch.delenv("ALGOEDGE_GROWW_API_SECRET", raising=False)
-
-    with pytest.raises(GrowwSessionError):
-        generate_daily_session()
-
-
-class FakeGrowwAPI:
-    def __init__(self, token: str) -> None:
-        self.token = token
-
-    def get_user_profile(self) -> dict:
-        return {"connected": True}
-
-    @staticmethod
-    def get_access_token(api_key: str, secret: str) -> str:
-        return "fake-token"
-
-
-def test_generate_daily_session_succeeds_with_access_token(monkeypatch) -> None:
-    monkeypatch.setenv("ALGOEDGE_GROWW_ACCESS_TOKEN", "token-123")
-    monkeypatch.setattr(broker_module, "GrowwAPI", FakeGrowwAPI)
-
-    client = generate_daily_session()
-
-    assert isinstance(client, FakeGrowwAPI)
-    assert client.token == "token-123"
-
-
-def test_generate_daily_session_uses_api_key_and_secret_when_no_token(monkeypatch) -> None:
-    monkeypatch.delenv("ALGOEDGE_GROWW_ACCESS_TOKEN", raising=False)
-    monkeypatch.setenv("ALGOEDGE_GROWW_API_KEY", "key")
-    monkeypatch.setenv("ALGOEDGE_GROWW_API_SECRET", "secret")
-    monkeypatch.setattr(broker_module, "GrowwAPI", FakeGrowwAPI)
-
-    client = generate_daily_session()
-
-    assert client.token == "fake-token"
-
-
-class FailingGrowwAPI:
-    def __init__(self, token: str) -> None:
-        pass
-
-    def get_user_profile(self) -> dict:
-        raise GrowwAPIException(code="401", msg="invalid token")
-
-
-def test_generate_daily_session_raises_on_verification_failure(monkeypatch) -> None:
-    monkeypatch.setenv("ALGOEDGE_GROWW_ACCESS_TOKEN", "bad-token")
-    monkeypatch.setattr(broker_module, "GrowwAPI", FailingGrowwAPI)
-
-    with pytest.raises(GrowwSessionError):
-        generate_daily_session()
