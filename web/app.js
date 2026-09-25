@@ -75,12 +75,16 @@ function renderSyncHeartbeat() {
     pill.innerHTML = '<i></i>Demo feed';
     return;
   }
+  // Means "last successful broker API request" (account/positions/orders
+  // polling) - deliberately not "Live", which would suggest a live
+  // market-data stream even when Market Data is unavailable.
+  pill.title = 'Last successful broker API request (account, positions, orders). Not a live market-data stream.';
   if (lastBrokerSyncAt == null) {
-    pill.innerHTML = '<i></i>Live · syncing&hellip;';
+    pill.innerHTML = '<i></i>Broker API · checking&hellip;';
     return;
   }
   const seconds = Math.max(0, Math.round((Date.now() - lastBrokerSyncAt) / 1000));
-  pill.innerHTML = `<i></i>Live · ${seconds === 0 ? 'just now' : `${seconds}s ago`}`;
+  pill.innerHTML = `<i></i>Last API success · ${seconds === 0 ? 'just now' : `${seconds}s ago`}`;
 }
 
 function getActiveGrid() { return grids.find((grid) => grid.id === activeGridId) || grids[0]; }
@@ -95,11 +99,90 @@ function formatDataValue(value) {
   return value == null ? '—' : value;
 }
 
+function kvGridHtml(entries) {
+  return `<dl class="kv-grid">${entries.map(([key, item]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDataValue(item))}</dd></div>`).join('')}</dl>`;
+}
+
 function keyValuesHtml(value) {
   const entries = Object.entries(value || {});
   return entries.length
-    ? `<div class="api-data"><dl class="kv-grid">${entries.map(([key, item]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDataValue(item))}</dd></div>`).join('')}</dl></div>`
+    ? `<div class="api-data">${kvGridHtml(entries)}</div>`
     : '<div class="api-data"><p class="data-empty">No data returned.</p></div>';
+}
+
+// ---- Funds & Margin: compact summary + the unchanged raw response ----
+// Field names are Groww's own get_available_margin_details() keys. A field
+// Groww doesn't return is shown as "—", never guessed.
+const MARGIN_SUMMARY_FIELDS = [
+  ['clear_cash', 'Available Cash'],
+  ['net_margin_used', 'Net Margin Used'],
+  ['collateral_available', 'Collateral Available'],
+  ['brokerage_and_charges', 'Brokerage & Charges'],
+];
+const MARGIN_SEGMENTS = [
+  ['fno_margin_details', 'F&O Margin'],
+  ['equity_margin_details', 'Equity Margin'],
+  ['commodity_margin_details', 'Commodity Margin'],
+];
+
+function fieldCaseInsensitive(object, key) {
+  if (!object || typeof object !== 'object') return undefined;
+  const match = Object.keys(object).find((candidate) => candidate.toLowerCase() === key);
+  return match === undefined ? undefined : object[match];
+}
+
+function formatMarginValue(value) {
+  const numeric = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : NaN;
+  if (Number.isFinite(numeric)) {
+    const formatted = `₹${Math.abs(numeric).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return numeric < 0 ? `-${formatted}` : formatted;
+  }
+  return formatDataValue(value);
+}
+
+function humanizeFieldName(key) {
+  const words = String(key).replace(/_/g, ' ').toLowerCase()
+    .replace(/\bfno\b/g, 'F&O').replace(/\b(cnc|mis|mtf|nrml)\b/g, (acronym) => acronym.toUpperCase());
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
+function marginSummaryHtml(margin, rawView) {
+  const metrics = MARGIN_SUMMARY_FIELDS.map(([key, label]) => `
+    <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatMarginValue(fieldCaseInsensitive(margin, key)))}</dd></div>`).join('');
+  const segments = MARGIN_SEGMENTS.map(([key, label]) => {
+    const details = fieldCaseInsensitive(margin, key);
+    const entries = details && typeof details === 'object' ? Object.entries(details) : [];
+    const body = entries.length
+      ? `<dl class="margin-segment-list">${entries.map(([field, value]) => `<div><dt title="${escapeHtml(humanizeFieldName(field))}">${escapeHtml(humanizeFieldName(field))}</dt><dd>${escapeHtml(formatMarginValue(value))}</dd></div>`).join('')}</dl>`
+      : '<p class="margin-segment-empty">Not returned by Groww</p>';
+    return `<section class="margin-segment"><h4>${escapeHtml(label)}</h4>${body}</section>`;
+  }).join('');
+  const rawEntries = Object.entries(rawView || {});
+  return `<div class="api-data margin-summary">
+    <dl class="margin-metrics">${metrics}</dl>
+    <div class="margin-segments">${segments}</div>
+    <details class="raw-response">
+      <summary>Raw broker response <span>${number(rawEntries.length)} fields</span></summary>
+      ${rawEntries.length ? kvGridHtml(rawEntries) : '<p class="data-empty">No data returned.</p>'}
+    </details>
+  </div>`;
+}
+
+// ---- Market Data: the actual backend error, and only the methods the
+// backend reports for this capability (marketData.availableMethods) ----
+const MARKET_DATA_METHOD_LABELS = { get_ltp: 'LTP', get_quote: 'Quote', get_ohlc: 'OHLC' };
+
+function marketDataUnavailableHtml(marketData) {
+  const affected = (marketData.availableMethods || []).map((method) => MARKET_DATA_METHOD_LABELS[method] || method);
+  const reason = marketData.error || 'No market data request has succeeded yet.';
+  return `<div class="api-data"><div class="capability-alert">
+    <p class="capability-alert-title">Market data — Unavailable</p>
+    <p class="capability-alert-error">${escapeHtml(reason)}</p>
+    <dl class="capability-alert-meta">
+      ${affected.length ? `<div><dt>Affected</dt><dd>${escapeHtml(affected.join(' · '))}</dd></div>` : ''}
+      <div><dt>Impact</dt><dd>Live market quotes cannot currently be retrieved.</dd></div>
+    </dl>
+  </div></div>`;
 }
 
 function dataTableHtml(rows) {
@@ -187,27 +270,18 @@ function renderDiagnosticTag(id, level, label) {
   tag.className = `status-tag ${level === 'ok' ? '' : level === 'warning' ? 'warning' : 'danger'}`;
 }
 
-function renderAccount(account, fetchSucceeded = true) {
-  lastAccountPayload = account;
-  renderPositionsBrokerCard();
-
-  const checkedAt = fetchSucceeded ? formatClockTime(new Date().toISOString()) : null;
-  document.querySelector('#accountSource').textContent =
-    `${account.source || 'Account data unavailable'}${checkedAt ? ` · Last checked: ${checkedAt}` : ''}`;
-
+// The two Diagnostics cards that depend on the broker's current connection
+// state. Re-rendered from BOTH renderAccount() and renderBrokerStatus(), so
+// the API Connection card always agrees with the header pill instead of
+// waiting for the next account refresh when broker status lands second.
+function renderDiagnosticConnectionCards() {
+  if (!document.querySelector('#diagApiConnection')) return;
+  const account = lastAccountPayload || {};
   const profile = account.profile || {};
-  const margin = account.margin || {};
   const marginStatus = account.marginStatus || {};
   const holdingsStatus = account.holdingsStatus || {};
   const positionsStatus = account.positionsStatus || {};
   const ordersStatus = account.ordersStatus || {};
-  const instrumentMaster = account.instrumentMaster || {};
-  const marketData = account.marketData || {};
-  const holdings = account.holdings || [];
-  const positions = account.positions || [];
-  const orders = account.orders || [];
-
-  // ---- Top 4 status cards ----
   const brokerStatus = lastBrokerStatusPayload?.connectionStatus;
   if (brokerStatus === 'CONNECTED') {
     renderDiagnosticCard('diagApiConnection', 'ok', 'CONNECTED', 'Groww session is active');
@@ -239,6 +313,30 @@ function renderAccount(account, fetchSucceeded = true) {
     renderDiagnosticCard('diagAccountData', 'danger', 'ERROR',
       `${failedChecks.map(([label]) => label).join(', ')} unavailable${firstError ? ` — ${firstError}` : ''}`);
   }
+}
+
+function renderAccount(account, fetchSucceeded = true) {
+  lastAccountPayload = account;
+  renderPositionsBrokerCard();
+
+  const checkedAt = fetchSucceeded ? formatClockTime(new Date().toISOString()) : null;
+  document.querySelector('#accountSource').textContent =
+    `${account.source || 'Account data unavailable'}${checkedAt ? ` · Last checked: ${checkedAt}` : ''}`;
+
+  const profile = account.profile || {};
+  const margin = account.margin || {};
+  const marginStatus = account.marginStatus || {};
+  const holdingsStatus = account.holdingsStatus || {};
+  const positionsStatus = account.positionsStatus || {};
+  const ordersStatus = account.ordersStatus || {};
+  const instrumentMaster = account.instrumentMaster || {};
+  const marketData = account.marketData || {};
+  const holdings = account.holdings || [];
+  const positions = account.positions || [];
+  const orders = account.orders || [];
+
+  // ---- Top 4 status cards ----
+  renderDiagnosticConnectionCards();
 
   // Endpoint-level: a market data 403 marks only this card unavailable and
   // never changes the broker connection card above.
@@ -246,7 +344,7 @@ function renderAccount(account, fetchSucceeded = true) {
     renderDiagnosticCard('diagMarketData', 'ok', 'CONNECTED', 'Live quotes available');
   } else if (marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE') {
     renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE',
-      marketData.error ? `Market data unavailable — ${marketData.error}` : 'Requires Groww’s paid Live Data API (get_ltp / get_quote / get_ohlc)');
+      marketData.error || 'No market data request has succeeded yet');
   } else {
     renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE', 'Status unknown');
   }
@@ -268,7 +366,9 @@ function renderAccount(account, fetchSucceeded = true) {
   if (marginStatus.available) {
     const fnoMargin = margin.fno_margin_details || {};
     const equityMargin = margin.equity_margin_details || {};
-    document.querySelector('#marginData').innerHTML = keyValuesHtml({ ...margin, ...fnoMargin, ...equityMargin });
+    // Summary first; the raw section keeps exactly the fields this panel
+    // always showed, collapsed.
+    document.querySelector('#marginData').innerHTML = marginSummaryHtml(margin, { ...margin, ...fnoMargin, ...equityMargin });
   } else {
     document.querySelector('#marginData').innerHTML =
       capabilityUnavailableHtml(marginStatus.error ? `Margin data unavailable: ${marginStatus.error}` : 'Margin data is currently unavailable.');
@@ -316,12 +416,10 @@ function renderAccount(account, fetchSucceeded = true) {
     <div class="api-subsection">
       <h4>Market data</h4>
       ${marketDataAvailable
-        ? '<p>Live quotes available.</p>'
-        : capabilityUnavailableHtml(
-          marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE'
-            ? `Live quotes unavailable${marketData.error ? ` (${marketData.error})` : ''}: this account's Groww tier may not include the paid Live Data API. Affected methods: ${(marketData.availableMethods || []).join(', ') || 'get_ltp, get_quote, get_ohlc'}.`
-            : 'Market data status unknown.',
-        )}
+        ? '<div class="api-data"><p class="data-empty data-empty-left">Live quotes available.</p></div>'
+        : marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE'
+          ? marketDataUnavailableHtml(marketData)
+          : capabilityUnavailableHtml('Market data status unknown.')}
     </div>`;
 }
 
@@ -1835,6 +1933,7 @@ function renderBrokerStatus(status) {
 
   systemStatusState.broker.connected = status.connectionStatus === 'CONNECTED';
   renderBrokerActionResult();
+  if (lastAccountPayload) renderDiagnosticConnectionCards();
   updatePulseStatus();
   updateAutoGates();
   updateCriticalBanner();
