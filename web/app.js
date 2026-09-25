@@ -146,7 +146,7 @@ function humanizeFieldName(key) {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function marginSummaryHtml(margin, rawView) {
+function marginSummaryHtml(margin, rawView, fetchedAt) {
   const metrics = MARGIN_SUMMARY_FIELDS.map(([key, label]) => `
     <div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(formatMarginValue(fieldCaseInsensitive(margin, key)))}</dd></div>`).join('');
   const segments = MARGIN_SEGMENTS.map(([key, label]) => {
@@ -158,7 +158,11 @@ function marginSummaryHtml(margin, rawView) {
     return `<section class="margin-segment"><h4>${escapeHtml(label)}</h4>${body}</section>`;
   }).join('');
   const rawEntries = Object.entries(rawView || {});
+  const snapshotNote = fetchedAt
+    ? `Broker snapshot fetched at ${fetchedAt}. Values don't update live — reload the page to fetch a new snapshot.`
+    : 'Broker snapshot. Values don\'t update live — reload the page to fetch a new snapshot.';
   return `<div class="api-data margin-summary">
+    <p class="snapshot-note">${escapeHtml(snapshotNote)}</p>
     <dl class="margin-metrics">${metrics}</dl>
     <div class="margin-segments">${segments}</div>
     <details class="raw-response">
@@ -319,9 +323,13 @@ function renderAccount(account, fetchSucceeded = true) {
   lastAccountPayload = account;
   renderPositionsBrokerCard();
 
-  const checkedAt = fetchSucceeded ? formatClockTime(new Date().toISOString()) : null;
+  // /api/account is fetched once per page load (loadAccount) - this is a
+  // point-in-time broker snapshot, not a live-updating feed, so it is
+  // labelled with when it was fetched rather than as "live".
+  const fetchedAt = fetchSucceeded ? formatClockTime(new Date().toISOString()) : null;
+  const sourceLabel = account.source === 'LIVE BROKER DATA' ? 'BROKER SNAPSHOT' : (account.source || 'Account data unavailable');
   document.querySelector('#accountSource').textContent =
-    `${account.source || 'Account data unavailable'}${checkedAt ? ` · Last checked: ${checkedAt}` : ''}`;
+    `${sourceLabel}${fetchedAt ? ` · Fetched: ${fetchedAt}` : ''}`;
 
   const profile = account.profile || {};
   const margin = account.margin || {};
@@ -368,7 +376,7 @@ function renderAccount(account, fetchSucceeded = true) {
     const equityMargin = margin.equity_margin_details || {};
     // Summary first; the raw section keeps exactly the fields this panel
     // always showed, collapsed.
-    document.querySelector('#marginData').innerHTML = marginSummaryHtml(margin, { ...margin, ...fnoMargin, ...equityMargin });
+    document.querySelector('#marginData').innerHTML = marginSummaryHtml(margin, { ...margin, ...fnoMargin, ...equityMargin }, fetchedAt);
   } else {
     document.querySelector('#marginData').innerHTML =
       capabilityUnavailableHtml(marginStatus.error ? `Margin data unavailable: ${marginStatus.error}` : 'Margin data is currently unavailable.');

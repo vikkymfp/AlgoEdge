@@ -124,4 +124,16 @@ test.describe('Broker Diagnostics UI', () => {
     await expect(pill).toHaveAttribute('title', /Last successful broker API request/);
     await expect(pill).not.toContainText('Live');
   });
+
+  test('account data is labelled as a fetched snapshot, not as live broker data', async ({ page }) => {
+    await openDiagnostics(page, FORBIDDEN_MARKET_DATA);
+    const source = page.locator('#accountSource');
+
+    await expect(source).toHaveText(/^BROKER SNAPSHOT · Fetched: \d{1,2}:\d{2}:\d{2}\s?(am|pm)$/i);
+    await expect(source).not.toContainText('LIVE');
+    const fetchedAt = (await source.innerText()).split('Fetched: ')[1];
+    await expect(page.locator('#marginData .snapshot-note')).toHaveText(
+      `Broker snapshot fetched at ${fetchedAt}. Values don't update live — reload the page to fetch a new snapshot.`,
+    );
+  });
 });
