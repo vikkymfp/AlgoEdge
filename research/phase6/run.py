@@ -4,6 +4,7 @@
     PYTHONPATH=src:. python -m research.phase6.run --interval 5m --refresh   # re-download
     PYTHONPATH=src:. python -m research.phase6.run --synthetic               # pipeline check only
     PYTHONPATH=src:. python -m research.phase6.run --db --indices nifty-50   # SQL Server historical_candles
+    PYTHONPATH=src:. python -m research.phase6.run --db --indices nifty-50 --protocol   # Phase 6 protocol run
 
 Writes research/phase6/results/<label>.md and .json. Never touches the
 canonical strategy, the broker, or any order path.
@@ -26,7 +27,7 @@ from algoedge.backtest import compute_regime_labels, pair_trades
 from fno_signals.config import INDEX_MAP, strategy_config_for
 from fno_signals.strategy import drop_invalid_bars
 from fno_signals.strategy import run as canonical_run
-from research.phase6 import candle_source, historical_db
+from research.phase6 import candle_source, historical_db, protocol
 from research.phase6 import data as data_mod
 from research.phase6.engine import (
     Summary,
@@ -133,7 +134,15 @@ def robustness_flags(results: dict, families: dict[str, list[str]]) -> dict[str,
     return flags
 
 
-def run_index(label: str, df: pd.DataFrame, interval: str, index_key: int) -> dict:
+def run_index(label: str, df: pd.DataFrame, interval: str, index_key: int, *,
+              wf_designs: tuple[protocol.WalkForwardDesign, ...] | None = None) -> dict:
+    """Baseline + research grid on ONE contiguous frame.
+
+    wf_designs=None keeps the original behaviour (the engine's default
+    walk-forward on 5m/15m). Given explicit designs, only those run - and a
+    design is skipped, with the reason recorded, when the frame has fewer
+    trading days than it needs (e.g. the 109-day 2015 segment): baseline and
+    grid results are still produced."""
     index_config = INDEX_MAP[index_key]
     base_config = strategy_config_for(index_config)
     quality = data_mod.quality_report(df, interval)
@@ -163,15 +172,50 @@ def run_index(label: str, df: pd.DataFrame, interval: str, index_key: int) -> di
     results["baseline"]["production_splits"] = production_splits(df, variants[0], index_config.name)
 
     wf_pool = {k: t for k, t in trades_by_variant.items() if results[k]["variant"].family != "realism"}
-    wf = walk_forward(df, wf_pool, "baseline") if interval in ("5m", "15m") else None
+    designs_out = None
+    if wf_designs is None:
+        wf = walk_forward(df, wf_pool, "baseline") if interval in ("5m", "15m") else None
+    else:
+        wf = None
+        trading_days = len(set(df.index.tz_convert("Asia/Kolkata").date))
+        designs_out = {}
+        for design in wf_designs:
+            if trading_days < design.required_trading_days:
+                designs_out[design.name] = {"design": design.as_dict(), "result": None, "skipped": (
+                    f"segment has {trading_days} trading days < {design.required_trading_days} required "
+                    f"({design.warmup_days} warm-up + {design.train_days} train + {design.test_days} test)")}
+            else:
+                designs_out[design.name] = {"design": design.as_dict(), "skipped": None,
+                                            "result": walk_forward(df, wf_pool, "baseline", **design.kwargs())}
+    tagged = protocol.trades_entered_on(trades_by_variant["baseline"])
     return {
         "label": label, "quality": quality, "results": results,
         "families": families, "flags": robustness_flags(results, families), "walk_forward": wf,
+        "walk_forward_designs": designs_out,
+        "non_standard_sessions": {
+            "dates_in_data": [d.isoformat() for d in protocol.sessions_in(df)],
+            "baseline_trades_entered": len(tagged),
+            "baseline_net_points_on_them": sum(t.points for t in tagged),
+        },
     }
+
+
+def _render_wf(title: str, wf) -> list[str]:
+    lines = ["", f"### {title}", "",
+             "| train | test | picked | test net (picked) | test net (baseline) |", "|---|---|---|---|---|"]
+    lines += [f"| {w['train']} | {w['test']} | {w['picked']} | {_fmt(w['picked_test_net'], 1)} "
+              f"| {_fmt(w['baseline_test_net'], 1)} |" for w in wf.windows]
+    lines += ["", HEADER.split("\n")[0].rsplit("| train", 1)[0] + "|",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|",
+              _row("walk-forward picks (OOS)", wf.selected_oos), _row("baseline (same OOS days)", wf.baseline_oos)]
+    return lines
 
 
 def render(run: dict, interval: str, synthetic: bool) -> str:
     lines = [f"## {run['label']} ({interval})", ""]
+    if run.get("metadata"):
+        lines += ["### Protocol metadata", "", "```json", json.dumps(run["metadata"], indent=1, default=str),
+                  "```", ""]
     if synthetic:
         lines += ["> SYNTHETIC random-walk data - pipeline check only, NOT a strategy result.", ""]
     q = run["quality"].as_dict()
@@ -218,6 +262,20 @@ def render(run: dict, interval: str, synthetic: bool) -> str:
         lines += ["", HEADER.split("\n")[0].rsplit("| train", 1)[0] + "|",
                   "|---|---|---|---|---|---|---|---|---|---|---|---|",
                   _row("walk-forward picks (OOS)", wf.selected_oos), _row("baseline (same OOS days)", wf.baseline_oos)]
+    for name, entry in (run.get("walk_forward_designs") or {}).items():
+        d = entry["design"]
+        title = (f"Walk-forward {name} ({d['train_days']} train -> {d['test_days']} test, step {d['step_days']}, "
+                 f"{'anchored' if d['anchored'] else 'rolling'}, warm-up {d['warmup_days']}, "
+                 f"min {d['min_train_trades']} closed train trades)")
+        if entry["skipped"]:
+            lines += ["", f"### {title}", "", f"Skipped: {entry['skipped']}."]
+        else:
+            lines += _render_wf(title, entry["result"])
+    sessions = run.get("non_standard_sessions")
+    if sessions and sessions["dates_in_data"]:
+        lines += ["", f"Non-standard sessions in this data (tagged, not removed): {', '.join(sessions['dates_in_data'])}"
+                  f"; baseline trades entered on them: {sessions['baseline_trades_entered']} "
+                  f"({_fmt(sessions['baseline_net_points_on_them'], 1)} pts)."]
     return "\n".join(lines) + "\n"
 
 
@@ -299,6 +357,21 @@ def _parse_end(value: str) -> pd.Timestamp:
     return ts
 
 
+def _parse_holdout(value: str):
+    """--holdout-from: a date only (YYYY-MM-DD) - the holdout is whole days."""
+    if not _DATE_ONLY.fullmatch(value.strip()):
+        raise argparse.ArgumentTypeError("expected YYYY-MM-DD")
+    return pd.Timestamp(value.strip()).date()
+
+
+def _naive_ist(ts: pd.Timestamp):
+    """A bound in the DB's convention (naive IST wall-clock)."""
+    ts = pd.Timestamp(ts)
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("Asia/Kolkata").tz_localize(None)
+    return ts.to_pydatetime()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--interval", default="5m", choices=list(data_mod.BACKTEST_TIMEFRAMES))
@@ -321,7 +394,30 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--end", type=_parse_end, default=None,
                         help="with --db: last bar_start to read (inclusive, IST); YYYY-MM-DD = the whole day, "
                              "an explicit date-time is used exactly")
+    parser.add_argument("--holdout-from", type=_parse_holdout, default=None, metavar="YYYY-MM-DD",
+                        help="with --db: first day of the final holdout; research reads only bars up to the "
+                             "previous day 23:59:59 IST and never touches the holdout")
+    parser.add_argument("--wf-design", action="append", choices=sorted(protocol.DESIGNS_BY_NAME), default=None,
+                        help="with --db: run this reviewed walk-forward design instead of the legacy default "
+                             "(repeatable)")
+    parser.add_argument("--protocol", action="store_true",
+                        help=f"with --db: the Phase 6 research protocol - holdout from "
+                             f"{protocol.HOLDOUT_START} and both walk-forward designs (unless overridden)")
     args = parser.parse_args(argv)
+
+    if not args.db and (args.protocol or args.holdout_from is not None or args.wf_design):
+        parser.error("--protocol, --holdout-from and --wf-design are only supported with --db")
+    if args.protocol:
+        args.holdout_from = args.holdout_from or protocol.HOLDOUT_START
+        args.wf_design = args.wf_design or ["design1", "design2"]
+    args.research_end = None
+    if args.holdout_from is not None:
+        args.research_end = protocol.research_end_for(args.holdout_from)
+        if args.start is not None and _naive_ist(args.start) > args.research_end:
+            parser.error(f"--start {args.start} is inside the holdout (from {args.holdout_from})")
+        if args.end is not None and _naive_ist(args.end) > args.research_end:
+            parser.error(f"--end {args.end} would read into the holdout (from {args.holdout_from}); "
+                         f"research ends {args.research_end}")
 
     if args.db:
         conflicting = [flag for flag, used in (("--csv", args.csv is not None), ("--synthetic", args.synthetic),
@@ -372,22 +468,44 @@ def _run_db(args) -> int:
     on either side were adjacent. Segments are reported separately; no
     cross-segment aggregate is computed."""
     index_id = args.indices[0]
+    index_key = data_mod.INDEX_CHOICE[index_id]
+    research_end = getattr(args, "research_end", None)
+    holdout_from = getattr(args, "holdout_from", None)
+    # With a holdout, the reader's upper bound IS the research end: holdout
+    # bars are never read, so nothing downstream can see them.
+    end = args.end if research_end is None or args.end is not None else pd.Timestamp(research_end)
     engine = historical_db.research_engine()
     segments = candle_source.load_db_segments(
-        engine, index_id=index_id, timeframe=args.interval, start=args.start, end=args.end,
+        engine, index_id=index_id, timeframe=args.interval, start=args.start, end=end,
         source=args.db_source,
     )
     if not segments:
         print(f"No candles in historical_candles for index_id={index_id!r}, timeframe={args.interval!r}, "
-              f"source={args.db_source!r}, start={args.start}, end={args.end}", file=sys.stderr)
+              f"source={args.db_source!r}, start={args.start}, end={end}", file=sys.stderr)
         return 1
+    if research_end is not None:
+        last_bar = max(_naive_ist(s.index[-1]) for s in segments)
+        if last_bar > research_end:  # defence in depth - the reader bound makes this impossible
+            raise RuntimeError(f"holdout leak: read a bar at {last_bar} after research end {research_end}")
+    designs = tuple(protocol.DESIGNS_BY_NAME[name] for name in (getattr(args, "wf_design", None) or []))
+    metadata = protocol.research_metadata(
+        index_id=index_id, index_key=index_key, timeframe=args.interval,
+        dataset_source=f"historical_candles (source={args.db_source})", segments=segments, designs=designs,
+        holdout_start=holdout_from, research_end=research_end, loads=protocol.db_loads(engine, args.db_source),
+    )
     runs = []
     for number, segment in enumerate(segments, start=1):
         first, last = segment.index[0], segment.index[-1]
         label = f"{index_id} seg{number} {first:%Y-%m-%d %H:%M}..{last:%Y-%m-%d %H:%M}"
         print(f"{label}: {len(segment)} bars")
-        runs.append(run_index(label, segment, args.interval, data_mod.INDEX_CHOICE[index_id]))
-    _write_reports(args, f"db_{Path(args.db_source).stem}_{index_id}", runs)
+        if designs:
+            run = run_index(label, segment, args.interval, index_key, wf_designs=designs)
+        else:
+            run = run_index(label, segment, args.interval, index_key)
+        run["metadata"] = {**metadata, "segment_number": number}
+        runs.append(run)
+    suffix = "_protocol" if getattr(args, "protocol", False) else ""
+    _write_reports(args, f"db_{Path(args.db_source).stem}_{index_id}{suffix}", runs)
     return 0
 
 
@@ -399,7 +517,13 @@ def _write_reports(args, label: str, runs: list[dict]) -> None:
         [{"label": r["label"], "quality": _jsonable(r["quality"]),
           "results": {k: _jsonable(v) for k, v in r["results"].items()},
           "flags": r["flags"],
-          "walk_forward": _jsonable(r["walk_forward"]) if r["walk_forward"] else None} for r in runs],
+          "walk_forward": _jsonable(r["walk_forward"]) if r["walk_forward"] else None,
+          **({"walk_forward_designs": {
+              name: {"design": e["design"], "skipped": e["skipped"],
+                     "result": _jsonable(e["result"]) if e["result"] else None}
+              for name, e in r["walk_forward_designs"].items()}} if r.get("walk_forward_designs") else {}),
+          **({"non_standard_sessions": r["non_standard_sessions"]} if "non_standard_sessions" in r else {}),
+          **({"metadata": r["metadata"]} if r.get("metadata") else {})} for r in runs],
         indent=1, default=str,
     ))
     print(f"wrote {args.out / label}.md / .json")
