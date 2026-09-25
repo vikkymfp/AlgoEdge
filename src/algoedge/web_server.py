@@ -361,8 +361,15 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
                 "side": order_manager.account.side,
             },
         }
-    is_exit = event.kind in ("EXIT_SL", "EXIT_TARGET")
-    exit_reason = (exit_reasons.STOP_LOSS if event.kind == "EXIT_SL" else exit_reasons.TARGET) if is_exit else None
+    is_exit = event.kind in ("EXIT_SL", "EXIT_TARGET", "SQUARE_OFF")
+    if event.kind == "EXIT_SL":
+        exit_reason = exit_reasons.STOP_LOSS
+    elif event.kind == "EXIT_TARGET":
+        exit_reason = exit_reasons.TARGET
+    elif event.kind == "SQUARE_OFF":
+        exit_reason = exit_reasons.END_OF_SESSION
+    else:
+        exit_reason = None
     db.record_signal(
         source="algoedge.auto_trader", index_id=index_id, timeframe=interval,
         action=event.kind, reason=event.option_symbol or f"exit @ {event.exit_level}",

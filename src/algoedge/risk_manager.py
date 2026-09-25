@@ -20,10 +20,12 @@ class RiskLimits:
 
     # Distinct from trading_end: no NEW positions may be opened after
     # entry_cutoff, but an existing position may still be exited up until
-    # trading_end. square_off_time is purely informational for now (shown
-    # on the dashboard as "positions should be flat by this time") - no
-    # forced auto-exit exists yet, that's execution-engine work for a
-    # later phase.
+    # trading_end. square_off_time is enforced for paper Auto Trade by
+    # algoedge.auto_trader.run_cycle() (Phase 4) - once reached, any open
+    # simulated CALL/PUT position is closed unconditionally, once per
+    # trading day. This field itself is just the configured boundary;
+    # RiskManager.check() never references it directly, since square-off
+    # is a forced close, not a gated new-order decision.
     entry_cutoff: time = time(15, 0)
     square_off_time: time = time(15, 20)
 

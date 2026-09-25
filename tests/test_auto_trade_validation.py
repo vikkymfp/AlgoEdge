@@ -430,14 +430,15 @@ def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch)
     assert exit_attempt.order.status == "PLACED"
 
 
-def test_square_off_time_is_not_enforced_yet_documented_gap() -> None:
-    # RiskLimits.square_off_time is explicitly documented (risk_manager.py)
-    # as informational only - no forced auto-exit exists. This test pins
-    # that down so it isn't silently assumed to be enforced; see "remaining
-    # gaps" in the Phase 2 report.
+def test_square_off_time_is_enforced_by_run_cycle_not_by_risk_manager_check() -> None:
+    # As of Phase 4, square_off_time IS enforced - by algoedge.auto_trader.
+    # run_cycle() (see tests/test_auto_trade_square_off.py), deliberately
+    # NOT inside RiskManager.check() itself, since square-off is a forced
+    # close that bypasses the gates check() applies to new risk-taking
+    # (kill switch, auto-trading-enabled, etc.), not one more gate alongside
+    # them. This pins that architectural boundary down explicitly.
     limits = RiskLimits()
     assert limits.square_off_time is not None
-    # RiskManager.check() never references square_off_time at all.
     import inspect
 
     from algoedge import risk_manager as risk_manager_module

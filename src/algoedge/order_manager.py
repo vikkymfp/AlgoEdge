@@ -7,7 +7,11 @@ from typing import Any
 logger = logging.getLogger("algoedge.orders")
 
 _ENTRY_EVENT_KINDS = {"ENTRY_CALL": "CALL", "ENTRY_PUT": "PUT"}
-_EXIT_EVENT_KINDS = {"EXIT_SL", "EXIT_TARGET"}
+# SQUARE_OFF (Phase 4's forced end-of-day close) is a closing fill exactly
+# like a strategy-driven EXIT_SL/EXIT_TARGET - same CALL/PUT P&L direction
+# math in fill_event() below, just triggered by wall-clock time instead of
+# the canonical strategy's own SL/TP levels.
+_EXIT_EVENT_KINDS = {"EXIT_SL", "EXIT_TARGET", "SQUARE_OFF"}
 
 
 @dataclass
@@ -40,6 +44,15 @@ class SimulatedAccount:
     # timestamp works here; kept untyped to avoid a pandas dependency in
     # this otherwise strategy-agnostic module.
     last_event_at: Any | None = None
+    # ISO date (YYYY-MM-DD, IST) of the last forced end-of-day square-off
+    # performed against this account - None until the first one ever
+    # happens. Compared against "today" each cycle (algoedge.auto_trader.
+    # run_cycle()): a fresh date each real trading day naturally means "not
+    # yet squared off today" without needing an explicit daily reset, the
+    # same pattern algoedge.risk_manager.RiskState.trade_day already uses.
+    # Also what blocks a stale ENTRY event from reopening a position after
+    # today's square-off has already happened.
+    square_off_date: str | None = None
 
     def fill(self, action: str, price: float, quantity: int, index_id: str | None = None) -> float:
         """Executes a simulated fill and returns realized P&L (0.0 for entries)."""

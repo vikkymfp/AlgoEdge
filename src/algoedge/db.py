@@ -80,6 +80,9 @@ _PENDING_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
         "slippage": "FLOAT NULL",
         "exit_reason": "NVARCHAR(24) NULL",
     },
+    "auto_trade_account_snapshots": {
+        "square_off_date": "NVARCHAR(10) NULL",
+    },
 }
 
 
@@ -368,15 +371,16 @@ def record_auto_trade_account_snapshot(index_id: str, account: Any, *, event: st
     """Persists a paper Auto Trade SimulatedAccount's current state
     (algoedge.order_manager.SimulatedAccount) - callers pass the account
     object itself (duck-typed: cash/quantity/average_price/side/
-    last_event_at) rather than importing the class here, to avoid a
-    fno_signals/algoedge.order_manager dependency in this module."""
+    last_event_at/square_off_date) rather than importing the class here,
+    to avoid a fno_signals/algoedge.order_manager dependency in this
+    module."""
     with _session_scope() as session:
         if session is None:
             return
         session.add(AutoTradeAccountSnapshot(
             index_id=index_id, event=event, cash=account.cash, quantity=account.quantity,
             average_price=account.average_price, side=account.side,
-            last_event_at=account.last_event_at,
+            last_event_at=account.last_event_at, square_off_date=account.square_off_date,
         ))
 
 
@@ -401,6 +405,7 @@ def load_latest_auto_trade_account_state(index_id: str) -> dict[str, Any] | None
         return {
             "cash": row.cash, "quantity": row.quantity, "average_price": row.average_price,
             "side": row.side, "last_event_at": row.last_event_at,
+            "square_off_date": row.square_off_date,
         }
     except SQLAlchemyError as error:
         logger.warning("Could not load prior auto trade account state for %s: %s", index_id, error)

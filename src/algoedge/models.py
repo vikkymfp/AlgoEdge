@@ -119,12 +119,17 @@ class AutoTradeAccountSnapshot(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     index_id: Mapped[str] = mapped_column(String(32))  # which OrderManager this snapshot belongs to
-    event: Mapped[str] = mapped_column(String(32))  # ENTRY_CALL|ENTRY_PUT|EXIT_SL|EXIT_TARGET|SNAPSHOT
+    event: Mapped[str] = mapped_column(String(32))  # ENTRY_CALL|ENTRY_PUT|EXIT_SL|EXIT_TARGET|SQUARE_OFF|SNAPSHOT
     cash: Mapped[float] = mapped_column(Float)
     quantity: Mapped[int] = mapped_column(Integer)
     average_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     side: Mapped[str | None] = mapped_column(String(8), nullable=True)  # CALL | PUT | None
     last_event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # ISO date (YYYY-MM-DD) of the last forced end-of-day square-off, if
+    # any - restoring this on startup is what stops a restart from either
+    # re-squaring-off an already-closed day or letting a stale ENTRY
+    # reopen a position that was deliberately closed for the day.
+    square_off_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
 
 class BrokerCredential(Base):
