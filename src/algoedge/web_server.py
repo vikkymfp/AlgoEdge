@@ -51,7 +51,7 @@ from algoedge.option_contract import (
 from algoedge.order_manager import OrderManager
 from algoedge.pnl import compute_paper_unrealized_pnl, compute_realized_pnl
 from algoedge.reconciliation_gate import ReconciliationGate
-from algoedge.risk_manager import RiskManager
+from algoedge.risk_manager import RiskManager, restore_risk_state
 from algoedge.scheduler import AutoTradingScheduler
 from algoedge.strategy_engine import DEFAULT_STRATEGY_CONFIG, StrategyConfig, evaluate
 from algoedge.strategy_performance import compute_strategy_performance
@@ -91,17 +91,16 @@ reconciliation_gate = ReconciliationGate()
 order_managers: dict[str, OrderManager] = {index_id: OrderManager() for index_id in INDEX_DEFINITIONS}
 SCHEDULER_TICK_SECONDS = 300.0  # 5 minutes, matches the default 5m candle timeframe
 
-_prior_risk_state = db.load_latest_risk_state(scope="paper")
-if _prior_risk_state is not None:
-    risk_manager.state.auto_trading_enabled = _prior_risk_state["auto_trading_enabled"]
-    risk_manager.state.kill_switch = _prior_risk_state["kill_switch"]
-    risk_manager.state.kill_switch_reason = _prior_risk_state["kill_switch_reason"]
-    risk_manager.state.trades_today = _prior_risk_state["trades_today"]
-    risk_manager.state.realized_pnl_today = _prior_risk_state["realized_pnl_today"]
-    risk_manager.state.trade_day = _prior_risk_state["trade_day"]
-    risk_manager.state.consecutive_losses = _prior_risk_state["consecutive_losses"]
-    risk_manager.state.consecutive_loss_halt = _prior_risk_state["consecutive_loss_halt"]
-    risk_manager.state.last_exit_at = _prior_risk_state["last_exit_at"]
+
+def _restore_paper_risk_state() -> None:
+    """Restores the paper RiskManager from its latest persisted snapshot -
+    see risk_manager.restore_risk_state() (last_exit_at comes back as IST)."""
+    prior_risk_state = db.load_latest_risk_state(scope="paper")
+    if prior_risk_state is not None:
+        restore_risk_state(risk_manager, prior_risk_state)
+
+
+_restore_paper_risk_state()
 
 # Restores each index's paper Auto Trade position/dedup state (see
 # auto_trader.restore_account_state()'s own docstring for the exact

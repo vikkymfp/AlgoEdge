@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -207,3 +208,31 @@ class RiskManager:
         if action == "SELL" and open_positions <= 0:
             return RiskDecision(False, "No open position to exit")
         return RiskDecision(True, "Risk checks passed")
+
+
+def restore_risk_state(risk_manager: RiskManager, snapshot: dict[str, Any]) -> None:
+    """Applies a persisted risk-state snapshot (see
+    `algoedge.db.load_latest_risk_state()`) onto `risk_manager.state` at
+    startup, so the daily-loss/trades-today counters, kill switch and
+    consecutive-loss halt survive a restart.
+
+    `last_exit_at` is stored in a timezone-naive DB DateTime column and
+    comes back naive; it is restored as Asia/Kolkata, the same convention
+    `algoedge.auto_trader.restore_account_state()` uses for the paper
+    account's `last_event_at`. Left naive, the cooldown comparison in
+    `check()` against the timezone-aware current time would raise
+    TypeError on every new-entry check after a restart.
+    """
+    state = risk_manager.state
+    last_exit_at = snapshot["last_exit_at"]
+    if last_exit_at is not None and last_exit_at.tzinfo is None:
+        last_exit_at = last_exit_at.replace(tzinfo=IST)
+    state.auto_trading_enabled = snapshot["auto_trading_enabled"]
+    state.kill_switch = snapshot["kill_switch"]
+    state.kill_switch_reason = snapshot["kill_switch_reason"]
+    state.trades_today = snapshot["trades_today"]
+    state.realized_pnl_today = snapshot["realized_pnl_today"]
+    state.trade_day = snapshot["trade_day"]
+    state.consecutive_losses = snapshot["consecutive_losses"]
+    state.consecutive_loss_halt = snapshot["consecutive_loss_halt"]
+    state.last_exit_at = last_exit_at
