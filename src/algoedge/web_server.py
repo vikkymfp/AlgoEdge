@@ -11,7 +11,7 @@ from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
 from algoedge import alerts, db, exit_reasons
-from algoedge.auto_trader import run_cycle
+from algoedge.auto_trader import restore_account_state, run_cycle
 from algoedge.auto_trading_report import compute_equity_curve
 from algoedge.backtest import (
     compute_backtest_metrics,
@@ -95,6 +95,17 @@ if _prior_risk_state is not None:
     risk_manager.state.consecutive_losses = _prior_risk_state["consecutive_losses"]
     risk_manager.state.consecutive_loss_halt = _prior_risk_state["consecutive_loss_halt"]
     risk_manager.state.last_exit_at = _prior_risk_state["last_exit_at"]
+
+# Restores each index's paper Auto Trade position/dedup state (see
+# auto_trader.restore_account_state()'s own docstring for the exact
+# fields and the fail-safe behavior on corrupted/missing data). A restart
+# never force-flattens an open paper position on its own - only its own
+# strategy exit (SL/target) closes it, same as if the process had never
+# restarted.
+for _index_id, _order_manager in order_managers.items():
+    _prior_account_state = db.load_latest_auto_trade_account_state(_index_id)
+    if _prior_account_state is not None:
+        restore_account_state(_order_manager.account, _prior_account_state)
 
 app = FastAPI()
 
@@ -366,6 +377,15 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
             realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,
         )
         db.record_risk_snapshot(risk_manager, event="TRADE_RECORDED")
+        if result.order.status == "PLACED":
+            # Persists the paper account's post-fill state (quantity/side/
+            # average_price/last_event_at) so a process restart can restore
+            # it - see the startup restoration block above `app = FastAPI()`.
+            # A persistence failure here fails safe: db.record_* never
+            # raises, the in-memory account state (and the order already
+            # placed) is unaffected either way, only next restart's
+            # recovery would be degraded.
+            db.record_auto_trade_account_snapshot(index_id, order_manager.account, event=event.kind)
     return {
         "indexId": index_id,
         "interval": interval,

@@ -104,6 +104,29 @@ class RiskStateEvent(Base):
     last_exit_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class AutoTradeAccountSnapshot(Base):
+    """Append-only audit log of a paper Auto Trade SimulatedAccount's state
+    (algoedge.order_manager) - one row per change. The most recent row per
+    index_id also restores an OrderManager's SimulatedAccount on startup,
+    so an open paper position and the event-dedup high-water mark
+    (last_event_at) survive a process restart instead of silently
+    resetting to flat - see algoedge.auto_trader.run_cycle()'s duplicate-
+    signal handling, which depends on last_event_at surviving a restart to
+    stay correct."""
+
+    __tablename__ = "auto_trade_account_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    index_id: Mapped[str] = mapped_column(String(32))  # which OrderManager this snapshot belongs to
+    event: Mapped[str] = mapped_column(String(32))  # ENTRY_CALL|ENTRY_PUT|EXIT_SL|EXIT_TARGET|SNAPSHOT
+    cash: Mapped[float] = mapped_column(Float)
+    quantity: Mapped[int] = mapped_column(Integer)
+    average_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    side: Mapped[str | None] = mapped_column(String(8), nullable=True)  # CALL | PUT | None
+    last_event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 class BrokerCredential(Base):
     """One row per broker (currently just "groww"), upserted in place -
     holds encrypted secrets and token metadata for the API Management page.

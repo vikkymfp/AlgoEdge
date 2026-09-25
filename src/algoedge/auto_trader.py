@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any
 
 from algoedge.market_pulse import TIMEFRAMES
-from algoedge.order_manager import OrderManager, OrderResult
-from algoedge.risk_manager import RiskDecision, RiskManager
+from algoedge.order_manager import OrderManager, OrderResult, SimulatedAccount
+from algoedge.risk_manager import IST, RiskDecision, RiskManager
 from fno_signals.config import INDEX_MAP, StrategyConfig, strategy_config_for
 from fno_signals.main import fetch_underlying_data
 from fno_signals.strategy import TradeEvent
 from fno_signals.strategy import run as run_strategy
+
+logger = logging.getLogger("algoedge.auto_trader")
 
 # Maps algoedge's kebab-case index ids (algoedge.market_pulse.INDEX_DEFINITIONS,
 # used throughout the dashboard/web_server) to fno_signals' numeric IndexConfig
@@ -80,19 +84,24 @@ def run_cycle(
     if not events:
         return AutoTradeCycleResult(None, RiskDecision(False, "No actionable signal"), None)
 
-    event = events[-1]
-
     # fno_signals.strategy.run() recomputes the ENTIRE window from scratch
     # every call - it has no memory of what a previous cycle already acted
-    # on. Without this check, the same already-filled event (the
-    # deterministic "latest event" in an unchanged/overlapping window)
-    # would be re-submitted to the Order Manager on every subsequent
-    # cycle, silently averaging more quantity into an already-open
-    # position. account.last_event_at is the high-water mark of the last
-    # event actually PLACED (see order_manager.py) - anything not newer
-    # than it is a duplicate/already-processed signal, not a new one.
-    if account.last_event_at is not None and event.timestamp <= account.last_event_at:
-        return AutoTradeCycleResult(event, RiskDecision(False, "Signal already processed (duplicate)"), None)
+    # on. account.last_event_at is the high-water mark of the last event
+    # actually PLACED (see order_manager.py); anything not newer than it
+    # has already been processed. Picking the OLDEST unprocessed event
+    # (not simply the newest one in the window) is what makes this
+    # chronological and loss-free: if two real events land between polls
+    # (e.g. an exit immediately followed by a reversal entry), this cycle
+    # processes only the first of them and a later cycle picks up the
+    # second - never silently skipping the intermediate one the way always
+    # jumping straight to events[-1] would.
+    unprocessed = (
+        events if account.last_event_at is None
+        else [e for e in events if e.timestamp > account.last_event_at]
+    )
+    if not unprocessed:
+        return AutoTradeCycleResult(events[-1], RiskDecision(False, "Signal already processed (duplicate)"), None)
+    event = unprocessed[0]
 
     # RiskManager.check()/record_trade() only understand BUY/SELL (kept
     # unchanged, per the canonical-strategy unification's own scope) - an
@@ -116,3 +125,45 @@ def run_cycle(
         # eligible to fire on a later cycle once the gate reopens.
         account.last_event_at = event.timestamp
     return AutoTradeCycleResult(event, decision, order_result)
+
+
+def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -> None:
+    """Applies a previously-persisted paper account snapshot (see
+    `algoedge.db.load_latest_auto_trade_account_state()`) onto a fresh
+    `SimulatedAccount`, restoring an open position and the event-dedup
+    high-water mark (`last_event_at`) across a process restart - without
+    this, `run_cycle()`'s duplicate-signal check would have no memory of
+    what was already filled before the restart, and could re-fill it.
+
+    Fails safe on malformed/unexpected data: never raises, and leaves
+    `account` at its safe, already-flat defaults if the snapshot can't be
+    applied cleanly - a corrupted persistence row must never crash startup
+    or silently open a position from garbage data. Deliberately does NOT
+    force-flatten a genuinely open position just because the process
+    restarted - that would be a forced square-off, a separate, not-yet-
+    built feature (see RiskLimits.square_off_time's own docstring).
+    """
+    try:
+        cash = float(snapshot["cash"])
+        quantity = int(snapshot["quantity"])
+        average_price = snapshot["average_price"]
+        side = snapshot["side"]
+        last_event_at = snapshot["last_event_at"]
+        if average_price is not None:
+            average_price = float(average_price)
+        if side is not None and side not in ("CALL", "PUT"):
+            raise ValueError(f"unexpected side {side!r}")
+        if last_event_at is not None and getattr(last_event_at, "tzinfo", "missing") is None:
+            # SQL Server's DATETIME2 carries no UTC offset - every other
+            # persisted/restored timestamp in this app assumes IST
+            # (algoedge.risk_manager.IST) when it comes back naive.
+            last_event_at = last_event_at.replace(tzinfo=IST)
+    except (KeyError, TypeError, ValueError) as error:
+        logger.warning("Could not restore auto trade account state, starting flat instead: %s", error)
+        return
+
+    account.cash = cash
+    account.quantity = quantity
+    account.average_price = average_price
+    account.side = side
+    account.last_event_at = last_event_at

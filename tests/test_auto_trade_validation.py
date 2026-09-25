@@ -66,7 +66,11 @@ def test_signal_parity_on_real_uptrend_data(monkeypatch) -> None:
     patch_fetch(monkeypatch, UPTREND_60)
     _expected_results, expected_events = run_strategy(UPTREND_60, CONFIG, "NIFTY 50")
     assert expected_events, "fixture must actually produce a signal to be meaningful"
-    expected = expected_events[-1]
+    # run_cycle() processes the OLDEST unprocessed event on a fresh
+    # account (see Phase 3's chronological event-processing fix) - that's
+    # events[0], not events[-1], for a window containing both an entry and
+    # its later exit.
+    expected = expected_events[0]
 
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
@@ -86,7 +90,7 @@ def test_signal_parity_on_real_downtrend_data(monkeypatch) -> None:
     patch_fetch(monkeypatch, DOWNTREND_60)
     _expected_results, expected_events = run_strategy(DOWNTREND_60, CONFIG, "NIFTY 50")
     assert expected_events
-    expected = expected_events[-1]
+    expected = expected_events[0]
 
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
@@ -400,21 +404,26 @@ def test_entry_blocked_after_trading_session_end(monkeypatch) -> None:
 def test_new_entry_blocked_past_entry_cutoff_but_exit_still_allowed(monkeypatch) -> None:
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
-    order_manager = OrderManager(SimulatedAccount(quantity=1, average_price=120.0, side="CALL"))
     past_cutoff = datetime(2026, 9, 23, 15, 10, tzinfo=IST)  # entry_cutoff=15:00, trading_end=15:30
 
-    # A fresh entry must be refused past the cutoff...
+    # A fresh entry (flat account) must be refused past the cutoff.
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
+    flat_order_manager = OrderManager()
     entry_attempt = auto_trader.run_cycle(
-        "nifty-50", "5m", risk_manager, order_manager, quantity=1, now=past_cutoff
+        "nifty-50", "5m", risk_manager, flat_order_manager, quantity=1, now=past_cutoff
     )
     assert entry_attempt.order is None
     assert "entry cutoff" in entry_attempt.risk.reason.lower()
 
-    # ...but an exit of the already-open position must still go through.
+    # ...but exiting a position entered before the cutoff (its entry
+    # already marked as processed via last_event_at, exactly as a real
+    # earlier run_cycle() call would have left it) must still go through.
+    entry_timestamp = UPTREND_60.index[16]
+    held_account = SimulatedAccount(quantity=1, average_price=120.0, side="CALL", last_event_at=entry_timestamp)
+    held_order_manager = OrderManager(held_account)
     patch_fetch(monkeypatch, UPTREND_60)
     exit_attempt = auto_trader.run_cycle(
-        "nifty-50", "5m", risk_manager, order_manager, quantity=1,
+        "nifty-50", "5m", risk_manager, held_order_manager, quantity=1,
         now=past_cutoff + timedelta(minutes=1), total_open_positions=1,
     )
     assert exit_attempt.event.kind in ("EXIT_TARGET", "EXIT_SL")

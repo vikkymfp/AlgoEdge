@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 from algoedge import db as db_module
 from algoedge.config import Settings
 from algoedge.models import Base, OrderRecord, StrategySignal
+from algoedge.order_manager import SimulatedAccount
 from algoedge.risk_manager import RiskManager
 
 
@@ -171,6 +172,63 @@ def test_load_latest_risk_state_returns_none_on_a_dropped_connection(monkeypatch
     monkeypatch.setattr(db_module, "_session_factory", broken_factory)
 
     assert db_module.load_latest_risk_state() is None
+
+
+# -- auto trade account snapshot (Phase 3 restart persistence) ----------------------------------------------
+
+
+def test_record_auto_trade_account_snapshot_does_not_raise_when_db_unavailable() -> None:
+    account = SimulatedAccount(quantity=1, average_price=100.0, side="CALL")
+    db_module.record_auto_trade_account_snapshot("nifty-50", account, event="ENTRY_CALL")
+
+
+def test_load_latest_auto_trade_account_state_returns_none_when_unavailable() -> None:
+    assert db_module.load_latest_auto_trade_account_state("nifty-50") is None
+
+
+def test_record_and_load_auto_trade_account_snapshot_round_trips(sqlite_session_factory) -> None:
+    account = SimulatedAccount(quantity=2, average_price=132.0, side="CALL")
+
+    db_module.record_auto_trade_account_snapshot("nifty-50", account, event="ENTRY_CALL")
+
+    state = db_module.load_latest_auto_trade_account_state("nifty-50")
+    assert state["quantity"] == 2
+    assert state["average_price"] == pytest.approx(132.0)
+    assert state["side"] == "CALL"
+
+
+def test_load_latest_auto_trade_account_state_returns_the_most_recent_snapshot(sqlite_session_factory) -> None:
+    flat = SimulatedAccount()
+    db_module.record_auto_trade_account_snapshot("nifty-50", flat, event="ENTRY_CALL")
+    filled = SimulatedAccount(quantity=1, average_price=100.0, side="CALL")
+    db_module.record_auto_trade_account_snapshot("nifty-50", filled, event="EXIT_TARGET")
+
+    state = db_module.load_latest_auto_trade_account_state("nifty-50")
+
+    assert state["quantity"] == 1
+    assert state["side"] == "CALL"
+
+
+def test_auto_trade_account_snapshots_are_scoped_per_index(sqlite_session_factory) -> None:
+    nifty_account = SimulatedAccount(quantity=1, average_price=100.0, side="CALL")
+    db_module.record_auto_trade_account_snapshot("nifty-50", nifty_account, event="ENTRY_CALL")
+    sensex_account = SimulatedAccount(quantity=3, average_price=500.0, side="PUT")
+    db_module.record_auto_trade_account_snapshot("sensex", sensex_account, event="ENTRY_PUT")
+
+    nifty_state = db_module.load_latest_auto_trade_account_state("nifty-50")
+    sensex_state = db_module.load_latest_auto_trade_account_state("sensex")
+
+    assert nifty_state["side"] == "CALL"
+    assert sensex_state["side"] == "PUT"
+
+
+def test_load_latest_auto_trade_account_state_returns_none_on_a_dropped_connection(monkeypatch) -> None:
+    def broken_factory():
+        raise OperationalError("connect", {}, Exception("connection dropped"))
+
+    monkeypatch.setattr(db_module, "_session_factory", broken_factory)
+
+    assert db_module.load_latest_auto_trade_account_state("nifty-50") is None
 
 
 # -- check_connection() - the System Health page's real DB health check ----------------------------------------------

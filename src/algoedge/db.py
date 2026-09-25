@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from algoedge.config import Settings, get_settings
 from algoedge.models import (
     AlertEvent,
+    AutoTradeAccountSnapshot,
     Base,
     BrokerCredential,
     OrderRecord,
@@ -357,6 +358,52 @@ def load_latest_risk_state(*, scope: str = "paper") -> dict[str, Any] | None:
         }
     except SQLAlchemyError as error:
         logger.warning("Could not load prior risk state: %s", error)
+        return None
+    finally:
+        if session is not None:
+            session.close()
+
+
+def record_auto_trade_account_snapshot(index_id: str, account: Any, *, event: str) -> None:
+    """Persists a paper Auto Trade SimulatedAccount's current state
+    (algoedge.order_manager.SimulatedAccount) - callers pass the account
+    object itself (duck-typed: cash/quantity/average_price/side/
+    last_event_at) rather than importing the class here, to avoid a
+    fno_signals/algoedge.order_manager dependency in this module."""
+    with _session_scope() as session:
+        if session is None:
+            return
+        session.add(AutoTradeAccountSnapshot(
+            index_id=index_id, event=event, cash=account.cash, quantity=account.quantity,
+            average_price=account.average_price, side=account.side,
+            last_event_at=account.last_event_at,
+        ))
+
+
+def load_latest_auto_trade_account_state(index_id: str) -> dict[str, Any] | None:
+    """Returns the most recent paper Auto Trade account snapshot for this
+    index as a plain dict (safe to use after the session closes), or None
+    if unavailable/none recorded yet - callers must treat None exactly like
+    "no prior state" (a fresh flat account), never as an error to surface."""
+    if _session_factory is None:
+        return None
+    session: Session | None = None
+    try:
+        session = _session_factory()
+        row = (
+            session.query(AutoTradeAccountSnapshot)
+            .filter(AutoTradeAccountSnapshot.index_id == index_id)
+            .order_by(AutoTradeAccountSnapshot.id.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return {
+            "cash": row.cash, "quantity": row.quantity, "average_price": row.average_price,
+            "side": row.side, "last_event_at": row.last_event_at,
+        }
+    except SQLAlchemyError as error:
+        logger.warning("Could not load prior auto trade account state for %s: %s", index_id, error)
         return None
     finally:
         if session is not None:
