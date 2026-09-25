@@ -1,5 +1,9 @@
 # Phase 6 - Strategy Backtest & Indicator Analysis: findings
 
+> **Final outcome:** see [`PHASE6_SUMMARY.md`](PHASE6_SUMMARY.md) - the historical research, the
+> pre-registered holdout and the paper-rule validation are complete, and the canonical strategy is
+> unchanged. Sections below marked PENDING DATA predate that run.
+
 Status: **Steps 2-4 complete (code audit, verified by execution). The correctness and consistency
 fixes from that audit are implemented - see "Phase 6 fixes" below. Steps 1, 5 and 6 are still
 blocked on market data** - this environment's network policy denies Yahoo Finance

@@ -338,3 +338,16 @@ def test_nothing_under_src_imports_the_gate() -> None:
 def test_evidence_dataclasses_are_immutable() -> None:
     with pytest.raises(dataclasses.FrozenInstanceError):
         comparison().net_points = 0.0
+
+
+def test_final_summary_matches_the_frozen_artifacts() -> None:
+    md = (REPO / "research/phase6/PHASE6_SUMMARY.md").read_text()
+    assert gate.FROZEN_GRID_HASH in md and protocol.grid_hash(1) in md
+    assert gate.gate_spec_hash() in md
+    assert "8c3f954d8bc22a8a2a1f1d21d9eb8ff3f78a987f575edb13a6f0c5891d2227ce" in md and "load_id 1" in md
+    assert "**Final status: the canonical strategy is UNCHANGED.**" in md
+    assert "**`rsi len 7` is not adopted.**" in md and "**`DI only` is not adopted.**" in md
+    assert all(f"`{c}`" in md for c in gate.PREREGISTERED_CANDIDATES)
+    assert "2024-04-26 00:00:00 .. 2025-04-25 23:59:59" in md and "evaluated exactly once" in md
+    for step in "ABCDEFGH":
+        assert re.search(rf"^\| {step} \|", md, re.MULTILINE), step
