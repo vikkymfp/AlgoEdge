@@ -13,9 +13,11 @@ from algoedge.risk_manager import RiskManager
 def reset_db_module_state():
     db_module._engine = None
     db_module._session_factory = None
+    db_module._last_successful_check_at = None
     yield
     db_module._engine = None
     db_module._session_factory = None
+    db_module._last_successful_check_at = None
 
 
 def test_init_db_disabled_when_no_server_configured() -> None:
@@ -169,3 +171,74 @@ def test_load_latest_risk_state_returns_none_on_a_dropped_connection(monkeypatch
     monkeypatch.setattr(db_module, "_session_factory", broken_factory)
 
     assert db_module.load_latest_risk_state() is None
+
+
+# -- check_connection() - the System Health page's real DB health check ----------------------------------------------
+
+
+def test_check_connection_reports_not_configured_when_no_engine(monkeypatch) -> None:
+    monkeypatch.setattr(db_module, "get_settings", lambda: Settings(db_server=""))
+
+    result = db_module.check_connection()
+
+    assert result["connected"] is False
+    assert result["databaseName"] is None
+    assert "not configured" in result["error"].lower()
+    assert result["lastSuccessfulCheckAt"] is None
+
+
+def test_check_connection_runs_a_real_query_and_succeeds(monkeypatch) -> None:
+    # A real SQLite engine, not a mock - check_connection() must actually
+    # execute SELECT 1 against it, not merely observe that _engine is set
+    # (that distinction is the entire point of this function existing
+    # instead of reusing is_available()).
+    engine = create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(db_module, "_engine", engine)
+    monkeypatch.setattr(db_module, "get_settings", lambda: Settings(db_server="localhost", db_name="AlgoEdge"))
+
+    result = db_module.check_connection()
+
+    assert result["connected"] is True
+    assert result["databaseName"] == "AlgoEdge"
+    assert result["error"] is None
+    assert result["lastSuccessfulCheckAt"] is not None
+    engine.dispose()
+
+
+def test_check_connection_returns_a_generic_error_never_the_raw_exception(monkeypatch) -> None:
+    class BrokenEngine:
+        def connect(self):
+            # A realistic driver error can contain connection-string
+            # fragments - this must never reach the returned result.
+            raise OperationalError(
+                "connect", {}, Exception("Login failed for user 'sa': password='hunter2' host=10.0.0.5")
+            )
+
+    monkeypatch.setattr(db_module, "_engine", BrokenEngine())
+    monkeypatch.setattr(db_module, "get_settings", lambda: Settings(db_server="10.0.0.5", db_name="AlgoEdge"))
+
+    result = db_module.check_connection()
+
+    assert result["connected"] is False
+    assert result["error"] == "Unable to connect to database"
+    assert "hunter2" not in result["error"]
+    assert "10.0.0.5" not in result["error"]
+
+
+def test_check_connection_keeps_last_successful_time_after_a_later_failure(monkeypatch) -> None:
+    engine = create_engine("sqlite:///:memory:")
+    monkeypatch.setattr(db_module, "_engine", engine)
+    monkeypatch.setattr(db_module, "get_settings", lambda: Settings(db_server="localhost", db_name="AlgoEdge"))
+    first = db_module.check_connection()
+    assert first["connected"] is True
+    engine.dispose()
+
+    class BrokenEngine:
+        def connect(self):
+            raise OperationalError("connect", {}, Exception("connection dropped"))
+
+    monkeypatch.setattr(db_module, "_engine", BrokenEngine())
+    second = db_module.check_connection()
+
+    assert second["connected"] is False
+    assert second["lastSuccessfulCheckAt"] == first["lastSuccessfulCheckAt"]

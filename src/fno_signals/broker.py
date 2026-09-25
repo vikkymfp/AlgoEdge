@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any
@@ -13,6 +14,43 @@ from growwapi.groww.exceptions import GrowwAPIException
 from fno_signals.config import IndexConfig
 
 IST = ZoneInfo("Asia/Kolkata")
+
+# The instrument master is ~140k rows and doesn't change intraday (same
+# justification already established in algoedge/manual_trading.py's own
+# cache for this exact Groww endpoint) - cached here too so a caller that
+# resolves both legs of an option chain (e.g. CALL then PUT) in one request,
+# or polls this on a timer, doesn't re-fetch the whole instrument master
+# from Groww every time. Never affects order price/quantity - those come
+# from the signal/event, not this lookup - only which already-listed
+# contract a strike+right resolves to, which is stable within a trading day.
+_INSTRUMENTS_CACHE_TTL = 300.0
+_instruments_cache: dict[str, tuple[float, pd.DataFrame]] = {}
+
+
+def _get_instruments(client: GrowwAPI) -> pd.DataFrame:
+    cached = _instruments_cache.get("all")
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _INSTRUMENTS_CACHE_TTL:
+        return cached[1]
+    instruments = client.get_all_instruments()
+    _instruments_cache["all"] = (now, instruments)
+    return instruments
+
+
+def check_instrument_master(client: GrowwAPI) -> dict[str, Any]:
+    """A real, live-checked status of Groww's instrument master lookup (the
+    ~140k-row table resolve_contract() depends on for every strike/expiry/
+    lot-size resolution across this app) - reuses the same cached
+    _get_instruments() every live/backtest/diagnostic call already goes
+    through, so this never issues an extra Groww request beyond what
+    normal use already causes. Never assumed available just because the
+    broker session itself is connected - a real query is what's checked."""
+    try:
+        instruments = _get_instruments(client)
+        count = len(instruments) if instruments is not None else 0
+        return {"available": count > 0, "count": count, "error": None}
+    except GrowwAPIException as error:
+        return {"available": False, "count": None, "error": str(error)}
 
 
 class GrowwSessionError(RuntimeError):
@@ -106,7 +144,7 @@ def resolve_contract(
     fall back to a guessed symbol in that case.
     """
     as_of = as_of or datetime.now(IST).date()
-    instruments: pd.DataFrame = client.get_all_instruments()
+    instruments: pd.DataFrame = _get_instruments(client)
 
     matches = instruments[
         (instruments["underlying_symbol"] == index_config.groww_underlying)

@@ -95,18 +95,35 @@ function formatDataValue(value) {
   return value == null ? '—' : value;
 }
 
-function renderKeyValues(target, value) {
+function keyValuesHtml(value) {
   const entries = Object.entries(value || {});
-  target.innerHTML = entries.length ? `<div class="api-data"><dl class="kv-grid">${entries.map(([key, item]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDataValue(item))}</dd></div>`).join('')}</dl></div>` : '<div class="api-data"><p class="data-empty">No data returned.</p></div>';
+  return entries.length
+    ? `<div class="api-data"><dl class="kv-grid">${entries.map(([key, item]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(formatDataValue(item))}</dd></div>`).join('')}</dl></div>`
+    : '<div class="api-data"><p class="data-empty">No data returned.</p></div>';
+}
+
+function dataTableHtml(rows) {
+  if (!rows || rows.length === 0) {
+    return '<div class="api-data"><p class="data-empty">No data returned.</p></div>';
+  }
+  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
+  return `<div class="api-data"><table class="data-table"><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td title="${escapeHtml(formatDataValue(row[column]))}">${escapeHtml(formatDataValue(row[column]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+}
+
+// Distinct from the table/kv-grid's own "No data returned" (which means the
+// call succeeded and genuinely has nothing) - this means the call itself
+// didn't work, and says which capability and (when known) why, rather than
+// showing an empty table that looks identical to "no data" either way.
+function capabilityUnavailableHtml(reason) {
+  return `<div class="api-data"><p class="data-empty diagnostic-unavailable">${escapeHtml(reason)}</p></div>`;
+}
+
+function renderKeyValues(target, value) {
+  target.innerHTML = keyValuesHtml(value);
 }
 
 function renderDataTable(target, rows) {
-  if (!rows || rows.length === 0) {
-    target.innerHTML = '<div class="api-data"><p class="data-empty">No data returned.</p></div>';
-    return;
-  }
-  const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
-  target.innerHTML = `<div class="api-data"><table class="data-table"><thead><tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${columns.map((column) => `<td title="${escapeHtml(formatDataValue(row[column]))}">${escapeHtml(formatDataValue(row[column]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  target.innerHTML = dataTableHtml(rows);
 }
 
 // Cached so the compact broker card on the Positions page can reuse data
@@ -150,33 +167,155 @@ document.querySelector('#positionsBrokerToggle')?.addEventListener('click', () =
   document.querySelector('#positionsBrokerDetails').hidden = !positionsBrokerCardExpanded;
 });
 
-function renderAccount(account) {
+// Small, generic pieces shared by the top 4 diagnostic cards and the 5
+// section tags on Broker Diagnostics - the backend (live_grid.py's
+// account_snapshot()) is the sole source of truth for connected/available/
+// error; this only ever formats what it already returned.
+function renderDiagnosticCard(id, level, label, detail) {
+  const item = document.querySelector(`#${id}`);
+  if (!item) return;
+  item.querySelector('strong').innerHTML = `<i class="status-dot"></i>${escapeHtml(label)}`;
+  item.className = `system-status-item ${level}`;
+  const detailEl = document.querySelector(`#${id}Detail`);
+  if (detailEl) detailEl.textContent = detail || '';
+}
+
+function renderDiagnosticTag(id, level, label) {
+  const tag = document.querySelector(`#${id}`);
+  if (!tag) return;
+  tag.textContent = label;
+  tag.className = `status-tag ${level === 'ok' ? '' : level === 'warning' ? 'warning' : 'danger'}`;
+}
+
+function renderAccount(account, fetchSucceeded = true) {
   lastAccountPayload = account;
   renderPositionsBrokerCard();
-  document.querySelector('#accountSource').textContent = account.source || 'Account data unavailable';
+
+  const checkedAt = fetchSucceeded ? formatClockTime(new Date().toISOString()) : null;
+  document.querySelector('#accountSource').textContent =
+    `${account.source || 'Account data unavailable'}${checkedAt ? ` · Last checked: ${checkedAt}` : ''}`;
+
   const profile = account.profile || {};
   const margin = account.margin || {};
-  const fnoMargin = margin.fno_margin_details || {};
-  const equityMargin = margin.equity_margin_details || {};
-  document.querySelector('#accountSummary').innerHTML = [
-    ['Connection', profile.connected ? 'Authenticated' : 'Unavailable'],
-    ['Active segments', (profile.activeSegments || []).join(', ') || '—'],
-    ['Holdings', (account.holdings || []).length],
-    ['Instrument master', account.instrumentMaster?.available ? 'Available' : 'Unavailable']
-  ].map(([label, value]) => `<div class="account-stat"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`).join('');
-  renderKeyValues(document.querySelector('#profileData'), profile);
-  renderKeyValues(document.querySelector('#marginData'), { ...margin, ...fnoMargin, ...equityMargin });
-  document.querySelector('#holdingsCount').textContent = (account.holdings || []).length;
-  document.querySelector('#positionsCount').textContent = (account.positions || []).length;
-  document.querySelector('#ordersDataCount').textContent = (account.orders || []).length;
-  renderDataTable(document.querySelector('#holdingsData'), account.holdings);
-  renderDataTable(document.querySelector('#positionsData'), account.positions);
-  renderDataTable(document.querySelector('#ordersData'), account.orders);
-  renderKeyValues(document.querySelector('#instrumentData'), {
-    ...account.instrumentMaster,
-    marketDataStatus: account.marketData?.status,
-    marketDataMethods: account.marketData?.availableMethods
-  });
+  const marginStatus = account.marginStatus || {};
+  const holdingsStatus = account.holdingsStatus || {};
+  const positionsStatus = account.positionsStatus || {};
+  const ordersStatus = account.ordersStatus || {};
+  const instrumentMaster = account.instrumentMaster || {};
+  const marketData = account.marketData || {};
+  const holdings = account.holdings || [];
+  const positions = account.positions || [];
+  const orders = account.orders || [];
+
+  // ---- Top 4 status cards ----
+  const brokerStatus = lastBrokerStatusPayload?.connectionStatus;
+  if (brokerStatus === 'CONNECTED') {
+    renderDiagnosticCard('diagApiConnection', 'ok', 'CONNECTED', 'Groww session is active');
+  } else if (brokerStatus) {
+    renderDiagnosticCard('diagApiConnection', 'warning', 'UNAVAILABLE',
+      brokerStatus === 'TOKEN_EXPIRED' ? 'Access token expired — update it on the Broker page' : `Session status: ${brokerStatus}`);
+  } else {
+    renderDiagnosticCard('diagApiConnection', 'warning', 'UNAVAILABLE', 'Checking broker connection…');
+  }
+
+  const accountChecks = [
+    ['Profile', profile.connected, profile.error],
+    ['Margin', marginStatus.available, marginStatus.error],
+    ['Holdings', holdingsStatus.available, holdingsStatus.error],
+    ['Positions', positionsStatus.available, positionsStatus.error],
+    ['Orders', ordersStatus.available, ordersStatus.error],
+  ];
+  const failedChecks = accountChecks.filter(([, available]) => !available);
+  if (brokerStatus !== 'CONNECTED') {
+    renderDiagnosticCard('diagAccountData', 'warning', 'UNAVAILABLE', 'Requires an active Groww connection');
+  } else if (failedChecks.length === 0) {
+    renderDiagnosticCard('diagAccountData', 'ok', 'CONNECTED', 'Profile, margin, holdings, positions and orders all responded');
+  } else {
+    const firstError = failedChecks.find(([, , error]) => error)?.[2];
+    renderDiagnosticCard('diagAccountData', 'danger', 'ERROR',
+      `${failedChecks.map(([label]) => label).join(', ')} unavailable${firstError ? ` — ${firstError}` : ''}`);
+  }
+
+  if (marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE') {
+    renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE', 'Requires Groww’s paid Live Data API (get_ltp / get_quote / get_ohlc)');
+  } else if (marketData.status) {
+    renderDiagnosticCard('diagMarketData', 'ok', 'CONNECTED', 'Live quotes available');
+  } else {
+    renderDiagnosticCard('diagMarketData', 'warning', 'UNAVAILABLE', 'Status unknown');
+  }
+
+  if (instrumentMaster.available) {
+    renderDiagnosticCard('diagInstrumentMaster', 'ok', 'CONNECTED', `${number(instrumentMaster.count)} instruments loaded`);
+  } else {
+    renderDiagnosticCard('diagInstrumentMaster', 'danger', 'ERROR', instrumentMaster.error || 'Could not load instrument master');
+  }
+
+  // ---- Connection & Permissions ----
+  renderDiagnosticTag('diagProfileTag', profile.connected ? 'ok' : 'danger', profile.connected ? 'Available' : 'Unavailable');
+  document.querySelector('#profileData').innerHTML = profile.connected
+    ? keyValuesHtml(profile)
+    : capabilityUnavailableHtml(profile.error ? `Profile unavailable: ${profile.error}` : 'Profile data is currently unavailable.');
+
+  // ---- Funds & Margin ----
+  renderDiagnosticTag('diagMarginTag', marginStatus.available ? 'ok' : 'danger', marginStatus.available ? 'Available' : 'Unavailable');
+  if (marginStatus.available) {
+    const fnoMargin = margin.fno_margin_details || {};
+    const equityMargin = margin.equity_margin_details || {};
+    document.querySelector('#marginData').innerHTML = keyValuesHtml({ ...margin, ...fnoMargin, ...equityMargin });
+  } else {
+    document.querySelector('#marginData').innerHTML =
+      capabilityUnavailableHtml(marginStatus.error ? `Margin data unavailable: ${marginStatus.error}` : 'Margin data is currently unavailable.');
+  }
+
+  // ---- Holdings & Positions (combined section) ----
+  document.querySelector('#holdingsPositionsCount').textContent = `${number(holdings.length)} / ${number(positions.length)}`;
+  const bothAvailable = holdingsStatus.available && positionsStatus.available;
+  const eitherAvailable = holdingsStatus.available || positionsStatus.available;
+  renderDiagnosticTag('diagHoldingsPositionsTag', bothAvailable ? 'ok' : eitherAvailable ? 'warning' : 'danger', bothAvailable ? 'Available' : eitherAvailable ? 'Partial' : 'Unavailable');
+  document.querySelector('#holdingsPositionsData').innerHTML = `
+    <div class="api-subsection">
+      <h4>Holdings</h4>
+      ${holdingsStatus.available ? dataTableHtml(holdings) : capabilityUnavailableHtml(holdingsStatus.error ? `Holdings unavailable: ${holdingsStatus.error}` : 'Holdings are currently unavailable.')}
+    </div>
+    <div class="api-subsection">
+      <h4>Positions</h4>
+      ${positionsStatus.available ? dataTableHtml(positions) : capabilityUnavailableHtml(positionsStatus.error ? `Positions unavailable: ${positionsStatus.error}` : 'Positions are currently unavailable.')}
+    </div>`;
+
+  // ---- Orders & Trades ----
+  document.querySelector('#ordersDataCount').textContent = number(orders.length);
+  renderDiagnosticTag('diagOrdersTag', ordersStatus.available ? 'ok' : 'danger', ordersStatus.available ? 'Available' : 'Unavailable');
+  document.querySelector('#ordersData').innerHTML = ordersStatus.available
+    ? dataTableHtml(orders)
+    : capabilityUnavailableHtml(ordersStatus.error ? `Orders unavailable: ${ordersStatus.error}` : 'Orders are currently unavailable.');
+
+  // ---- Instrument Master & Market Data (combined section) ----
+  // Market data is a documented tier restriction, not a live-checked toggle
+  // (see marketData.status above) - it is never "Available", so this
+  // section's own tag can only ever be Available (instrument master ok) or
+  // Partial (instrument master ok, market data isn't), never claiming both
+  // sub-capabilities work when one of them structurally can't.
+  const marketDataAvailable = marketData.status !== 'PERMISSION_DENIED_OR_UNAVAILABLE' && !!marketData.status;
+  renderDiagnosticTag(
+    'diagInstrumentTag',
+    instrumentMaster.available && marketDataAvailable ? 'ok' : instrumentMaster.available ? 'warning' : 'danger',
+    instrumentMaster.available && marketDataAvailable ? 'Available' : instrumentMaster.available ? 'Partial' : 'Unavailable',
+  );
+  document.querySelector('#instrumentMarketData').innerHTML = `
+    <div class="api-subsection">
+      <h4>Instrument master</h4>
+      ${instrumentMaster.available
+        ? keyValuesHtml({ count: instrumentMaster.count, fields: instrumentMaster.fields })
+        : capabilityUnavailableHtml(instrumentMaster.error ? `Instrument master unavailable: ${instrumentMaster.error}` : 'Instrument master is currently unavailable.')}
+    </div>
+    <div class="api-subsection">
+      <h4>Market data</h4>
+      ${capabilityUnavailableHtml(
+        marketData.status === 'PERMISSION_DENIED_OR_UNAVAILABLE'
+          ? `Live quotes unavailable: this account's Groww tier does not include the paid Live Data API. Affected methods: ${(marketData.availableMethods || []).join(', ') || 'get_ltp, get_quote, get_ohlc'}.`
+          : 'Market data status unknown.',
+      )}
+    </div>`;
 }
 
 function renderMarket(indices, source) {
@@ -579,6 +718,13 @@ function updateCriticalBanner() {
 
 const HEALTH_DOT_CLASS = { HEALTHY: 'ok', CONNECTED: 'ok', OK: 'ok', ACTIVE: 'ok' };
 
+function formatClockTime(iso) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+}
+
 function renderSystemHealth(health) {
   const rows = [
     ['healthDatabase', health.database?.status],
@@ -593,6 +739,17 @@ function renderSystemHealth(health) {
     item.querySelector('strong').innerHTML = `<i class="status-dot"></i>${escapeHtml(status || 'UNKNOWN')}`;
     item.className = `system-status-item ${ok ? 'ok' : 'danger'}`;
   });
+
+  // Database gets its own detail line - a real backend health check result
+  // (algoedge.db.check_connection(), a live SELECT 1), never inferred from
+  // application state, and never a raw driver error (no credentials/
+  // connection-string fragments reach the browser).
+  const db = health.database || {};
+  const dbCheckTime = formatClockTime(db.lastSuccessfulCheckAt);
+  document.querySelector('#healthDatabaseDetail').textContent = db.status === 'CONNECTED'
+    ? `${db.databaseName || 'AlgoEdge'} · SQL Server · Last check: ${dbCheckTime || '—'}`
+    : `${db.error || 'Unable to connect to database'}${dbCheckTime ? ` · Last successful check: ${dbCheckTime}` : ''}`;
+
   document.querySelector('#healthLastSignal').textContent = health.lastSignal ? formatTimestamp(health.lastSignal.createdAt) : 'No signals recorded';
   document.querySelector('#healthLastBrokerSync').textContent = formatTimestamp(health.lastBrokerSync);
   document.querySelector('#healthLastDbWrite').textContent = formatTimestamp(health.lastDatabaseWrite);
@@ -909,7 +1066,7 @@ async function loadAccount() {
     if (!response.ok) throw new Error('Account API unavailable');
     renderAccount(await response.json());
   } catch {
-    renderAccount({ source: 'ACCOUNT DATA UNAVAILABLE', profile: { connected: false }, holdings: [], positions: [], orders: [], margin: {}, instrumentMaster: {}, marketData: {} });
+    renderAccount({ source: 'ACCOUNT DATA UNAVAILABLE', profile: { connected: false }, holdings: [], positions: [], orders: [], margin: {}, instrumentMaster: {}, marketData: {} }, false);
   }
 }
 
@@ -1570,6 +1727,28 @@ function brokerConnectionTagClass(connectionStatus) {
   return 'danger';
 }
 
+const TOKEN_STATUS_CLASS = { ACTIVE: 'positive', EXPIRING_SOON: 'warning', EXPIRED: 'warning', INVALID: 'warning', UNAVAILABLE: '' };
+
+// Groww doesn't publish a real expiry timestamp (see token_service.py's
+// _estimate_token_expiry) - this is always an estimate based on the known
+// ~6am IST daily reset, computed client-side purely from the already-
+// fetched tokenExpiryAt so it stays live between the 20s broker-status
+// refreshes without a new request.
+function formatTimeRemaining(expiryAtIso) {
+  if (!expiryAtIso) return null;
+  const target = new Date(expiryAtIso).getTime();
+  if (Number.isNaN(target)) return null;
+  const diffMs = target - Date.now();
+  if (diffMs <= 0) {
+    const overdueMinutes = Math.round(-diffMs / 60000);
+    return overdueMinutes < 60 ? `Expired ${overdueMinutes}m ago` : `Expired ${Math.round(overdueMinutes / 60)}h ago`;
+  }
+  const totalMinutes = Math.round(diffMs / 60000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
+}
+
 function renderBrokerStatus(status) {
   lastBrokerStatusPayload = status;
   renderPositionsBrokerCard();
@@ -1581,23 +1760,43 @@ function renderBrokerStatus(status) {
   connectionTag.textContent = status.connectionStatus;
   connectionTag.className = `status-tag ${brokerConnectionTagClass(status.connectionStatus)}`;
 
-  document.querySelector('#brokerTokenStatus').textContent = status.tokenStatus;
+  const tokenStatusEl = document.querySelector('#brokerTokenStatus');
+  tokenStatusEl.textContent = status.tokenStatus;
+  tokenStatusEl.className = TOKEN_STATUS_CLASS[status.tokenStatus] || '';
+
   document.querySelector('#brokerTokenCreatedAt').textContent = formatTimestamp(status.tokenCreatedAt);
   document.querySelector('#brokerTokenExpiryAt').textContent = status.tokenExpiryAt
-    ? formatTimestamp(status.tokenExpiryAt)
+    ? `${formatTimestamp(status.tokenExpiryAt)}${status.tokenExpiryIsEstimated ? ' (estimated — Groww resets tokens daily ~6:00 AM IST)' : ''}`
     : 'Not published by Groww for this auth method';
+
+  const remaining = formatTimeRemaining(status.tokenExpiryAt);
+  const remainingEl = document.querySelector('#brokerTokenTimeRemaining');
+  remainingEl.textContent = remaining || '—';
+  remainingEl.className = remaining && remaining.startsWith('Expired') ? 'warning' : '';
+
   document.querySelector('#brokerLastValidatedAt').textContent = formatTimestamp(status.lastValidatedAt);
   document.querySelector('#brokerLastSuccessAt').textContent = formatTimestamp(status.lastSuccessfulRequestAt);
   document.querySelector('#brokerLastError').textContent = status.lastError || 'None';
   document.querySelector('#brokerPersisted').textContent = status.credentialsPersisted ? 'Yes (encrypted)' : 'No (in-memory only this session)';
 
+  // This pill is the header's global "Groww Connected" indicator, driven
+  // purely by connectionStatus - a value that now only ever says CONNECTED
+  // when the last real API request actually succeeded (token_service.py's
+  // _TrackedClient marks it down the instant any real call fails,
+  // anywhere in the app - not just on an explicit Test Connection click).
   const pill = document.querySelector('#brokerStatusPill');
   pill.classList.remove('warning', 'danger');
   if (status.connectionStatus === 'CONNECTED') {
     pill.innerHTML = '<i></i>Groww Connected';
   } else if (status.connectionStatus === 'TOKEN_EXPIRED') {
     pill.classList.add('warning');
-    pill.innerHTML = '<i></i>Token Update Required';
+    pill.innerHTML = '<i></i>Token Expired';
+  } else if (status.connectionStatus === 'TOKEN_INVALID') {
+    pill.classList.add('danger');
+    pill.innerHTML = '<i></i>Invalid Credentials';
+  } else if (status.connectionStatus === 'MISSING') {
+    pill.classList.add('warning');
+    pill.innerHTML = '<i></i>Groww Not Configured';
   } else {
     pill.classList.add('danger');
     pill.innerHTML = '<i></i>Groww Disconnected';
@@ -1745,6 +1944,8 @@ function initBrokerPanel() {
 
 let backtestIndexId = CHART_INDICES[0].id;
 let backtestMode = 'single';
+let lastBacktestParams = null;
+let backtestChartMountQueue = [];
 
 function renderBacktestIndexTabs() {
   document.querySelector('#backtestIndexTabs').innerHTML = CHART_INDICES.map((index) => `
@@ -1760,49 +1961,136 @@ function renderMetricCard(label, value, className) {
   return `<div class="backtest-metric-card"><span>${escapeHtml(label)}</span><strong class="${className || ''}">${value}</strong></div>`;
 }
 
-function renderBacktestMetrics(metrics) {
-  if (metrics.totalTrades === 0) {
-    return '<p class="data-empty">No trades were generated in this window.</p>';
-  }
+function backtestKpiCard(label, value, className) {
+  return `<div class="backtest-kpi-card"><span>${escapeHtml(label)}</span><strong class="${className || ''}">${value}</strong></div>`;
+}
+
+// The 7 primary KPIs the spec calls out, kept visually prominent and
+// separate from the secondary detail row below - "much easier to
+// understand at a glance" means a short, curated list up top, not all 12
+// computed metrics competing for attention at once.
+function renderBacktestKpis(metrics) {
   const pnlClass = metrics.netPoints >= 0 ? 'positive' : 'warning';
-  const breakdown = (label, perf) => `
-    <div class="backtest-split-card">
-      <h3>${escapeHtml(label)}</h3>
-      <div class="backtest-metric-grid">
-        ${renderMetricCard('Trades', number(perf.trades))}
-        ${renderMetricCard('Win rate', perf.win_rate == null ? '—' : `${perf.win_rate.toFixed(1)}%`)}
-        ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'warning')}
-      </div>
-    </div>`;
-  const bucketRows = (buckets) => buckets.map((b) => `
+  const expectancyClass = metrics.expectancyPoints == null ? '' : metrics.expectancyPoints >= 0 ? 'positive' : 'warning';
+  return `<div class="backtest-kpi-grid">
+    ${backtestKpiCard('Trades', number(metrics.totalTrades))}
+    ${backtestKpiCard('Win rate', metrics.winRate == null ? '—' : `${metrics.winRate.toFixed(1)}%`)}
+    ${backtestKpiCard('Profit factor', metrics.profitFactor == null ? '—' : metrics.profitFactor.toFixed(2))}
+    ${backtestKpiCard('Net P&L (pts)', metrics.netPoints.toFixed(1), pnlClass)}
+    ${backtestKpiCard('Expectancy (pts)', metrics.expectancyPoints == null ? '—' : metrics.expectancyPoints.toFixed(1), expectancyClass)}
+    ${backtestKpiCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1), metrics.maxDrawdownPoints > 0 ? 'warning' : '')}
+    ${backtestKpiCard('Max consec. losses', number(metrics.maxConsecutiveLosses), metrics.maxConsecutiveLosses > 0 ? 'warning' : '')}
+  </div>`;
+}
+
+function renderBacktestSecondary(metrics) {
+  return `<div class="backtest-metric-grid">
+    ${renderMetricCard('Wins', number(metrics.wins), 'positive')}
+    ${renderMetricCard('Losses', number(metrics.losses), metrics.losses > 0 ? 'warning' : '')}
+    ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1), metrics.averageTradePoints >= 0 ? 'positive' : 'warning')}
+    ${renderMetricCard('Largest win (pts)', metrics.largestWinPoints == null ? '—' : metrics.largestWinPoints.toFixed(1), 'positive')}
+    ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'warning')}
+  </div>`;
+}
+
+function renderDirectionCard(label, perf, cssClass) {
+  return `<div class="backtest-direction-card ${cssClass}">
+    <h3>${escapeHtml(label)}</h3>
+    <div class="backtest-metric-grid">
+      ${renderMetricCard('Trades', number(perf.trades))}
+      ${renderMetricCard('Win rate', perf.win_rate == null ? '—' : `${perf.win_rate.toFixed(1)}%`)}
+      ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'warning')}
+    </div>
+  </div>`;
+}
+
+function backtestBucketRows(buckets) {
+  return buckets.map((b) => `
     <tr>
       <td class="mono">${escapeHtml(b.label)}</td>
       <td class="mono">${number(b.trades)}</td>
       <td class="mono">${b.win_rate == null ? '—' : `${b.win_rate.toFixed(1)}%`}</td>
       <td class="mono ${b.net_points >= 0 ? 'positive' : 'warning'}">${b.net_points.toFixed(1)}</td>
     </tr>`).join('');
+}
 
-  return `
-    <div class="backtest-metric-grid">
-      ${renderMetricCard('Total trades', number(metrics.totalTrades))}
-      ${renderMetricCard('Win rate', metrics.winRate == null ? '—' : `${metrics.winRate.toFixed(1)}%`)}
-      ${renderMetricCard('Profit factor', metrics.profitFactor == null ? '—' : metrics.profitFactor.toFixed(2))}
-      ${renderMetricCard('Net points', metrics.netPoints.toFixed(1), pnlClass)}
-      ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1))}
-      ${renderMetricCard('Expectancy (pts)', metrics.expectancyPoints == null ? '—' : metrics.expectancyPoints.toFixed(1))}
-      ${renderMetricCard('Largest win (pts)', metrics.largestWinPoints == null ? '—' : metrics.largestWinPoints.toFixed(1), 'positive')}
-      ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'warning')}
-      ${renderMetricCard('Max consecutive losses', number(metrics.maxConsecutiveLosses))}
-      ${renderMetricCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1))}
+// Cumulative-points equity curve, built from the exact trade ledger the
+// backend returned - never a rupee figure (see backtest.py's module
+// docstring: this account has no historical option-premium data, so a
+// rupee P&L would have to be invented). Chart containers are recreated on
+// every run via innerHTML, so the chart instance itself is too - mounted
+// after the HTML lands in the DOM via backtestChartMountQueue below.
+function mountEquityChart(containerId, trades) {
+  const container = document.querySelector(`#${containerId}`);
+  if (!container || !trades || trades.length === 0) return;
+  const colors = chartColors();
+  const chart = LightweightCharts.createChart(container, {
+    layout: { background: { color: colors.bg }, textColor: colors.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 10 },
+    grid: { vertLines: { color: colors.grid }, horzLines: { color: colors.grid } },
+    rightPriceScale: { borderColor: colors.border },
+    timeScale: { borderColor: colors.border, timeVisible: true, secondsVisible: false },
+    autoSize: true,
+  });
+  const series = chart.addLineSeries({ color: '#4f46e5', lineWidth: 2 });
+  const sorted = [...trades].sort((a, b) => new Date(a.exitTime) - new Date(b.exitTime));
+  const seenTimes = new Set();
+  let cumulative = 0;
+  const data = [];
+  for (const trade of sorted) {
+    cumulative += trade.points;
+    let time = Math.floor(new Date(trade.exitTime).getTime() / 1000);
+    if (!Number.isFinite(time)) continue;
+    while (seenTimes.has(time)) time += 1; // lightweight-charts needs strictly ascending, unique times
+    seenTimes.add(time);
+    data.push({ time, value: cumulative });
+  }
+  series.setData(data);
+  chart.timeScale().fitContent();
+}
+
+function renderEquitySection(containerId, trades) {
+  if (!trades || trades.length === 0) {
+    return '';
+  }
+  backtestChartMountQueue.push({ id: containerId, trades });
+  return `<div class="backtest-equity-section">
+    <div class="backtest-equity-heading">
+      <h4>Equity curve</h4>
+      <small>Cumulative points — not rupee P&amp;L</small>
     </div>
-    ${breakdown('CALL performance', metrics.callPerformance)}
-    ${breakdown('PUT performance', metrics.putPerformance)}
+    <div class="backtest-equity-chart" id="${containerId}"></div>
+  </div>`;
+}
+
+function renderSegmentResult(label, segmentKey, candleCount, metrics, trades) {
+  const header = `<div class="backtest-segment-header"><h3>${escapeHtml(label)}</h3><span>${number(candleCount)} candles</span></div>`;
+  if (!metrics) {
+    return `<div class="backtest-segment segment-${segmentKey}">
+      ${header}
+      <p class="data-empty">Not enough candles in this window.</p>
+    </div>`;
+  }
+  if (metrics.totalTrades === 0) {
+    return `<div class="backtest-segment segment-${segmentKey}">
+      ${header}
+      <p class="data-empty">No trades were generated in this window.</p>
+    </div>`;
+  }
+  return `<div class="backtest-segment segment-${segmentKey}">
+    ${header}
+    ${renderBacktestKpis(metrics)}
+    ${renderBacktestSecondary(metrics)}
+    ${renderEquitySection(`backtestEquityChart-${segmentKey}`, trades)}
+    <div class="backtest-direction-grid">
+      ${renderDirectionCard('CALL performance', metrics.callPerformance, 'call')}
+      ${renderDirectionCard('PUT performance', metrics.putPerformance, 'put')}
+    </div>
     <div class="backtest-split-card">
       <h3>Time-of-day performance</h3>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Hour</th><th>Trades</th><th>Win rate</th><th>Net points</th></tr></thead>
-          <tbody>${bucketRows(metrics.timeOfDayPerformance) || '<tr class="empty-row"><td colspan="4">No data</td></tr>'}</tbody>
+          <tbody>${backtestBucketRows(metrics.timeOfDayPerformance) || '<tr class="empty-row"><td colspan="4">No data</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -1811,11 +2099,11 @@ function renderBacktestMetrics(metrics) {
       <div class="table-wrap">
         <table>
           <thead><tr><th>Regime</th><th>Trades</th><th>Win rate</th><th>Net points</th></tr></thead>
-          <tbody>${bucketRows(metrics.marketRegimePerformance) || '<tr class="empty-row"><td colspan="4">No data</td></tr>'}</tbody>
+          <tbody>${backtestBucketRows(metrics.marketRegimePerformance) || '<tr class="empty-row"><td colspan="4">No data</td></tr>'}</tbody>
         </table>
       </div>
     </div>
-  `;
+  </div>`;
 }
 
 async function runBacktest() {
@@ -1824,33 +2112,78 @@ async function runBacktest() {
   const interval = document.querySelector('#backtestInterval').value;
   const slippage = document.querySelector('#backtestSlippage').value || 0;
   button.disabled = true;
+  document.querySelector('#backtestExportBar').hidden = true;
+  document.querySelector('#backtestMetaRow').hidden = true;
   resultEl.innerHTML = '<p class="data-empty">Running backtest against historical data&hellip;</p>';
+  backtestChartMountQueue = [];
   try {
     const query = `index_id=${backtestIndexId}&interval=${interval}&assumed_slippage_points=${slippage}&split=${backtestMode === 'split'}`;
     const response = await fetch(`/api/backtest/run?${query}`, { headers: { Accept: 'application/json' } });
     if (!response.ok) throw new Error('Backtest failed');
     const payload = await response.json();
-    document.querySelector('#backtestDisclaimer').textContent =
-      `${payload.disclaimer} (${payload.candleCount} candles, period ${payload.period}.)`;
-    const executionStatus = `<div class="broker-result">
+    lastBacktestParams = {
+      index_id: backtestIndexId, interval, assumed_slippage_points: String(slippage), split: String(backtestMode === 'split'),
+    };
+
+    document.querySelector('#backtestDisclaimer').textContent = payload.disclaimer;
+    document.querySelector('#backtestMetaSymbol').textContent = payload.indexName || payload.indexId;
+    document.querySelector('#backtestMetaRange').textContent = `${payload.period} (${interval})`;
+    document.querySelector('#backtestMetaCandles').textContent = number(payload.candleCount);
+    document.querySelector('#backtestMetaSlippage').textContent = `${payload.assumedSlippagePoints} pts`;
+    document.querySelector('#backtestMetaRow').hidden = false;
+    document.querySelector('#backtestExportBar').hidden = false;
+
+    const executionStatus = `<div class="backtest-execution-status ok">
       <strong>Backtest execution: ✓ Completed</strong>
-      <p class="muted">This confirms the run finished without error — it says nothing about whether the strategy is profitable. Review the metrics below before drawing any conclusion.</p>
+      <p>This confirms the run finished without error — it says nothing about whether the strategy is profitable. Review the metrics below before drawing any conclusion.</p>
     </div>`;
+
     if (backtestMode === 'split') {
-      resultEl.innerHTML = executionStatus + ['train', 'validation', 'out_of_sample'].map((name) => {
-        const split = payload.splits[name];
-        const title = name === 'out_of_sample' ? 'Out-of-sample' : name.charAt(0).toUpperCase() + name.slice(1);
-        if (!split.metrics) return `<div class="backtest-split-card"><h3>${title}</h3><p class="data-empty">Not enough candles in this window.</p></div>`;
-        return `<div class="backtest-split-card"><h3>${title} (${split.candleCount} candles)</h3>${renderBacktestMetrics(split.metrics)}</div>`;
+      const segments = [['train', 'Train'], ['validation', 'Validation'], ['out_of_sample', 'Out-of-sample']];
+      resultEl.innerHTML = executionStatus + segments.map(([key, label]) => {
+        const split = payload.splits[key];
+        return renderSegmentResult(label, key, split.candleCount, split.metrics, split.trades);
       }).join('');
     } else {
-      resultEl.innerHTML = executionStatus + renderBacktestMetrics(payload.metrics);
+      resultEl.innerHTML = executionStatus + renderSegmentResult('Full period', 'full', payload.candleCount, payload.metrics, payload.trades);
     }
+    backtestChartMountQueue.forEach(({ id, trades }) => mountEquityChart(id, trades));
   } catch {
-    resultEl.innerHTML = '<div class="broker-result warning"><strong>Backtest execution: ✗ Failed</strong><p>Try a different index/timeframe or try again.</p></div>';
+    resultEl.innerHTML = '<div class="backtest-execution-status fail"><strong>Backtest execution: ✗ Failed</strong><p>Try a different index/timeframe or try again.</p></div>';
+    document.querySelector('#backtestExportBar').hidden = true;
+    lastBacktestParams = null;
   } finally {
     button.disabled = false;
   }
+}
+
+function triggerDownload(url) {
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.rel = 'noopener';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+}
+
+function downloadBacktestExport(kind) {
+  if (!lastBacktestParams) return;
+  const params = new URLSearchParams(lastBacktestParams);
+  triggerDownload(`/api/backtest/export/${kind}?${params}`);
+}
+
+// Purely client-side: wipes displayed results/charts/tables and the export
+// state back to the page's clean pre-run state. Never touches the control
+// bar's own selections (index/timeframe/slippage/mode) and never issues a
+// network request - the backend, strategy engine and export endpoints are
+// completely uninvolved.
+function clearBacktestResults() {
+  document.querySelector('#backtestResult').innerHTML = '<p class="data-empty">Run a backtest to see results.</p>';
+  document.querySelector('#backtestDisclaimer').textContent = '';
+  document.querySelector('#backtestMetaRow').hidden = true;
+  document.querySelector('#backtestExportBar').hidden = true;
+  backtestChartMountQueue = [];
+  lastBacktestParams = null;
 }
 
 function initBacktestPanel() {
@@ -1860,6 +2193,9 @@ function initBacktestPanel() {
     document.querySelectorAll('#backtestModeToggle .segmented-option').forEach((option) => option.classList.toggle('active', option === button));
   }));
   document.querySelector('#backtestRunButton').addEventListener('click', runBacktest);
+  document.querySelector('#backtestClearButton').addEventListener('click', clearBacktestResults);
+  document.querySelector('#backtestExportXlsx').addEventListener('click', () => downloadBacktestExport('xlsx'));
+  document.querySelector('#backtestExportPdf').addEventListener('click', () => downloadBacktestExport('pdf'));
 }
 
 initNav();

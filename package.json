@@ -1,0 +1,13 @@
+{
+  "name": "algoedge-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Playwright end-to-end tests for the AlgoEdge dashboard frontend (web/). The Python backend's own test suite is pytest (tests/) - this is separate infrastructure for behavior that only exists in the browser (DOM state, client-side-only interactions) and cannot be exercised by pytest.",
+  "scripts": {
+    "test:e2e": "playwright test",
+    "test:e2e:ui": "playwright test --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.47.0"
+  }
+}

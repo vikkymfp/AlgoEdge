@@ -131,6 +131,47 @@ def is_available() -> bool:
     return _session_factory is not None
 
 
+_last_successful_check_at: datetime | None = None
+
+
+def check_connection() -> dict:
+    """A real, lightweight DB health check - runs an actual `SELECT 1`
+    against the live engine right now. Never infers CONNECTED from whether
+    the engine object merely exists (that's is_available(), which only
+    reflects startup-time configuration and says nothing about whether the
+    connection is still good this moment) - System Health needs the real
+    thing, not application state standing in for it.
+
+    Never raises. Never returns the raw driver exception (which can echo
+    connection-string fragments) - only a fixed, generic message, with the
+    real exception logged server-side for whoever is actually debugging it.
+    """
+    global _last_successful_check_at
+    settings = get_settings()
+    database_name = settings.db_name if settings.db_server else None
+
+    if _engine is None:
+        return {
+            "connected": False, "databaseName": database_name,
+            "error": "Database not configured or unavailable" if settings.db_server else "Database not configured",
+            "lastSuccessfulCheckAt": _last_successful_check_at,
+        }
+    try:
+        with _engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        _last_successful_check_at = datetime.now(IST)
+        return {
+            "connected": True, "databaseName": database_name, "error": None,
+            "lastSuccessfulCheckAt": _last_successful_check_at,
+        }
+    except SQLAlchemyError as error:
+        logger.warning("Database health check failed: %s", error)
+        return {
+            "connected": False, "databaseName": database_name, "error": "Unable to connect to database",
+            "lastSuccessfulCheckAt": _last_successful_check_at,
+        }
+
+
 @contextmanager
 def _session_scope():
     """Yields a session for a write, or None if the DB isn't configured/

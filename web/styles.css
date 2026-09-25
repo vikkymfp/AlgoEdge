@@ -389,17 +389,78 @@ main { padding: 28px 0 56px; animation: page-in .4s ease both; }
 
 /* ---------- backtest ---------- */
 .backtest-panel { padding: 22px; }
-.backtest-panel .index-tabs { margin: 18px 0 0; width: fit-content; }
-.backtest-form { grid-template-columns: repeat(3, 1fr); margin-top: 16px; }
-.backtest-panel > .text-button-solid { margin-top: 20px; }
-.backtest-metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-top: 16px; }
+.backtest-panel .index-tabs { width: fit-content; }
+
+.backtest-control-bar {
+  margin-top: 16px; padding: 16px; border: 1px solid var(--border);
+  border-radius: var(--radius-md); background: var(--surface-alt);
+}
+.backtest-control-fields { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
+.backtest-control-fields .trade-field { min-width: 130px; }
+.backtest-run-button { margin-left: auto; white-space: nowrap; }
+.backtest-meta-row {
+  display: flex; flex-wrap: wrap; gap: 18px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border);
+}
+.backtest-meta-row span { display: flex; flex-direction: column; gap: 3px; }
+.backtest-meta-row strong { color: var(--text-faint); font: 700 9px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; }
+.backtest-meta-row em { color: var(--text); font: 600 12px var(--font-mono); font-style: normal; }
+
+.backtest-export-bar { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.backtest-export-label { color: var(--text-faint); font: 700 10px var(--font-ui); letter-spacing: .03em; text-transform: uppercase; margin-right: 4px; }
+.backtest-export-bar button { display: inline-flex; align-items: center; gap: 6px; }
+.backtest-export-bar svg { width: 15px; height: 15px; }
+
+.backtest-execution-status {
+  display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 12px 16px;
+  border-radius: var(--radius-sm); font: 600 12px var(--font-ui);
+}
+.backtest-execution-status.ok { color: var(--success); background: var(--success-soft); }
+.backtest-execution-status.fail { color: var(--danger); background: var(--danger-soft); }
+.backtest-execution-status p { margin: 0; color: var(--text-muted); font-weight: 500; }
+
+.backtest-segment { margin-top: 22px; padding: 18px; border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius-md); background: var(--surface); }
+.backtest-segment.segment-train { border-left-color: #2563eb; }
+.backtest-segment.segment-validation { border-left-color: #9333ea; }
+.backtest-segment.segment-out_of_sample { border-left-color: #ea580c; }
+.backtest-segment-header { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+.backtest-segment-header h3 { margin: 0; font: 800 14px var(--font-ui); text-transform: uppercase; letter-spacing: .03em; }
+.backtest-segment-header span { color: var(--text-faint); font: 600 11px var(--font-mono); }
+
+.backtest-kpi-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; margin-top: 14px; }
+.backtest-kpi-card {
+  padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt);
+}
+.backtest-kpi-card span { display: block; color: var(--text-faint); font: 700 9.5px var(--font-ui); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 6px; }
+.backtest-kpi-card strong { font: 800 18px var(--font-mono); }
+
+.backtest-metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-top: 12px; }
 .backtest-metric-card {
-  padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt);
+  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt);
 }
 .backtest-metric-card span { display: block; color: var(--text-muted); font: 600 10px var(--font-ui); text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px; }
-.backtest-metric-card strong { font: 700 16px var(--font-mono); }
-.backtest-split-card { margin-top: 20px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt); }
+.backtest-metric-card strong { font: 700 14px var(--font-mono); }
+
+.backtest-equity-section { margin-top: 18px; }
+.backtest-equity-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.backtest-equity-heading h4 { margin: 0; font: 700 12px var(--font-ui); }
+.backtest-equity-heading small { color: var(--text-faint); font: 600 10px var(--font-mono); }
+.backtest-equity-chart { height: 180px; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+
+.backtest-direction-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; margin-top: 18px; }
+.backtest-direction-card { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
+.backtest-direction-card.call { border-top: 3px solid var(--success); }
+.backtest-direction-card.put { border-top: 3px solid var(--danger); }
+.backtest-direction-card h3 { margin: 0 0 4px; font: 800 12px var(--font-ui); letter-spacing: .03em; }
+
+.backtest-split-card { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt); }
 .backtest-split-card h3 { font: 700 13px var(--font-ui); margin: 0 0 10px; text-transform: uppercase; letter-spacing: .03em; }
+
+@media (max-width: 1300px) { .backtest-kpi-grid { grid-template-columns: repeat(4, 1fr); } }
+@media (max-width: 900px) {
+  .backtest-kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .backtest-direction-grid { grid-template-columns: 1fr; }
+  .backtest-run-button { margin-left: 0; width: 100%; }
+}
 
 /* ---------- manual trading ---------- */
 .trade-panel { padding: 22px; }
@@ -599,7 +660,17 @@ tbody tr:hover { background: var(--surface-hover); }
 .account-stat { padding: 18px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); box-shadow: var(--shadow-sm); }
 .account-stat span { display: block; color: var(--text-faint); font: 700 10px var(--font-ui); letter-spacing: .03em; text-transform: uppercase; }
 .account-stat strong { display: block; margin-top: 10px; font-size: 17px; font-weight: 700; }
-.api-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+/* align-items: start overrides the grid default (stretch), which was
+   forcing every card in a row to match the tallest one's height (e.g.
+   Connection & Permissions stretching to match Funds & Margin) - each
+   card's height must be driven purely by its own content. Each side is its
+   own .api-column (a plain flex stack) rather than individual grid items,
+   so the left column can hold three short cards that stack independently
+   of the single tall Funds & Margin card on the right - a 2-item grid row
+   would otherwise still force a shared row-track height between them. */
+.api-panels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; align-items: start; }
+.api-column { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.api-panel-full { margin-top: 12px; }
 .api-panel { min-width: 0; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); overflow: hidden; }
 .api-panel summary { padding: 15px 18px; color: var(--text); cursor: pointer; font: 700 12.5px var(--font-ui); list-style-position: inside; }
 .api-panel summary:hover { background: var(--surface-hover); }
@@ -613,6 +684,9 @@ tbody tr:hover { background: var(--surface-hover); }
 .data-table th, .data-table td { max-width: 180px; overflow: hidden; padding: 9px 8px; border-top: 1px solid var(--border); text-align: left; text-overflow: ellipsis; white-space: nowrap; }
 .data-table th { color: var(--text-faint); font-size: 9px; text-transform: uppercase; }
 .data-empty { padding: 18px 0 2px; color: var(--text-faint); font: 500 10px var(--font-mono); }
+.diagnostic-unavailable { color: var(--warning); font-weight: 600; }
+.api-subsection + .api-subsection { margin-top: 6px; padding-top: 14px; border-top: 1px solid var(--border); }
+.api-subsection h4 { margin: 0 0 4px; padding: 0 18px; font: 700 10px var(--font-ui); letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); }
 
 footer { display: flex; justify-content: space-between; padding: 20px 0 30px; color: var(--text-faint); font: 500 10px var(--font-mono); }
 

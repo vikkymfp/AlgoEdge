@@ -9,6 +9,7 @@ from growwapi.groww.exceptions import GrowwAPIException
 
 from algoedge.config import Settings
 from algoedge.groww_broker import GrowwBroker
+from fno_signals.broker import check_instrument_master
 
 
 class LiveGridService:
@@ -67,32 +68,59 @@ class LiveGridService:
         }
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
             futures = {name: executor.submit(function) for name, function in tasks.items()}
-            responses = {
-                name: self._safe_read(future)
-                for name, future in futures.items()
-            }
+            # future.result() is safe to call twice on the same future (it
+            # replays the cached result/exception, no re-execution) - one
+            # pass gets the payload, the other gets the real success/error
+            # this capability's own diagnostic status is built from. Never
+            # inferred from whether the broker session merely connected.
+            responses = {name: self._safe_read(future) for name, future in futures.items()}
+            statuses = {name: self._capability_status(future) for name, future in futures.items()}
+
         profile = responses["profile"]
         holdings = self._payload(responses["holdings"])
         positions = self._payload(responses["positions"])
         margin = self._payload(responses["margin"])
         cash_orders = self._payload(responses["cash_orders"])
         fno_orders = self._payload(responses["fno_orders"])
+
+        cash_orders_ok, cash_orders_error = statuses["cash_orders"]
+        fno_orders_ok, fno_orders_error = statuses["fno_orders"]
+        orders_ok = cash_orders_ok and fno_orders_ok
+        orders_error = cash_orders_error or fno_orders_error
+
+        profile_ok, profile_error = statuses["profile"]
+        margin_ok, margin_error = statuses["margin"]
+        holdings_ok, holdings_error = statuses["holdings"]
+        positions_ok, positions_error = statuses["positions"]
+        instrument_master = check_instrument_master(self.broker.client)
+        # "LIVE BROKER DATA" must mean at least one real account endpoint
+        # actually responded - never a fixed label implying success
+        # regardless of whether every single one of the five parallel
+        # calls above actually failed (e.g. an expired token).
+        any_capability_ok = profile_ok or margin_ok or holdings_ok or positions_ok or orders_ok
+
         return {
-            "source": "LIVE BROKER DATA",
+            "source": "LIVE BROKER DATA" if any_capability_ok else "GROWW DATA UNAVAILABLE",
             "profile": {
-                "connected": True,
+                "connected": profile_ok,
+                "error": profile_error,
                 "nseEnabled": profile.get("nse_enabled"),
                 "bseEnabled": profile.get("bse_enabled"),
                 "ddpiEnabled": profile.get("ddpi_enabled"),
                 "activeSegments": profile.get("active_segments", []),
             },
             "margin": margin,
+            "marginStatus": {"available": margin_ok, "error": margin_error},
             "holdings": holdings,
+            "holdingsStatus": {"available": holdings_ok, "error": holdings_error},
             "positions": positions,
+            "positionsStatus": {"available": positions_ok, "error": positions_error},
             "orders": [*cash_orders, *fno_orders],
+            "ordersStatus": {"available": orders_ok, "error": orders_error},
             "instrumentMaster": {
-                "available": True,
-                "count": None,
+                "available": instrument_master["available"],
+                "count": instrument_master["count"],
+                "error": instrument_master["error"],
                 "fields": [
                     "exchange", "exchange_token", "trading_symbol", "groww_symbol", "name",
                     "instrument_type", "segment", "series", "isin", "underlying_symbol",
@@ -113,6 +141,24 @@ class LiveGridService:
             return value if isinstance(value, dict) else {}
         except (GrowwAPIException, KeyError, OSError, TimeoutError, TypeError, ValueError):
             return {}
+
+    @staticmethod
+    def _capability_status(future: Any) -> tuple[bool, str | None]:
+        """Whether this specific Groww call actually succeeded - the real
+        signal account_snapshot()'s per-capability status fields are built
+        from. Never leaks anything beyond the broker's own error message
+        (business-level, e.g. "Access forbidden" - the same class of
+        message token_service.status().lastError already surfaces
+        elsewhere in this app); never a credential or connection string."""
+        try:
+            value = future.result(timeout=8)
+            if isinstance(value, dict):
+                return True, None
+            return False, "Unexpected response shape from Groww"
+        except GrowwAPIException as error:
+            return False, str(error)
+        except (KeyError, OSError, TimeoutError, TypeError, ValueError) as error:
+            return False, f"{type(error).__name__}: {error}"
 
     def _grid(
         self,
@@ -222,7 +268,10 @@ class LiveGridService:
     def _payload(response: dict[str, Any]) -> list[dict[str, Any]]:
         payload = response.get("payload", response)
         if isinstance(payload, dict):
-            for key in ("positions", "order_list", "quote"):
+            # "holdings" confirmed live against the real account -
+            # get_holdings_for_user() wraps its list under that key too,
+            # same shape as positions/order_list/quote below.
+            for key in ("positions", "order_list", "quote", "holdings"):
                 value = payload.get(key)
                 if isinstance(value, list):
                     return value

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import requests
@@ -15,6 +15,25 @@ from algoedge.credential_manager import CredentialEncryptionUnavailable
 from algoedge.risk_manager import IST
 
 logger = logging.getLogger("algoedge.token_service")
+
+# Groww access tokens reset daily around 6:00 AM IST - documented platform
+# behavior, not a value get_access_token()/get_user_profile() actually
+# publish anywhere in their response. This is therefore always an ESTIMATE
+# used for the "Time Remaining"/"Expiring Soon" UI warning - it never
+# substitutes for real detection. The authoritative signal (connection_status
+# below) is set only from an actual validation call succeeding or failing;
+# the estimate is never allowed to mark a connection CONNECTED or downgrade
+# it to TOKEN_EXPIRED on its own.
+_TOKEN_DAILY_RESET_HOUR = 6
+_EXPIRING_SOON_WINDOW_MINUTES = 30
+
+
+def _estimate_token_expiry(created_at: datetime) -> datetime:
+    local = created_at.astimezone(IST)
+    reset_at = local.replace(hour=_TOKEN_DAILY_RESET_HOUR, minute=0, second=0, microsecond=0)
+    if local >= reset_at:
+        reset_at += timedelta(days=1)
+    return reset_at
 
 BROKER_NAME = "groww"
 
@@ -43,10 +62,11 @@ class BrokerStatus:
     api_key_masked: str | None
     api_secret_masked: str | None
     access_token_masked: str | None
-    token_status: str  # ACTIVE | EXPIRED | MISSING
-    connection_status: str  # CONNECTED | TOKEN_EXPIRED | DISCONNECTED | MISSING | ERROR
+    token_status: str  # ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE
+    connection_status: str  # CONNECTED | TOKEN_EXPIRED | TOKEN_INVALID | DISCONNECTED | MISSING | ERROR
     token_created_at: datetime | None
     token_expiry_at: datetime | None
+    token_expiry_is_estimated: bool
     last_validated_at: datetime | None
     last_successful_request_at: datetime | None
     last_error: str | None
@@ -61,15 +81,22 @@ class ConnectionTestResult:
 
 class _TrackedClient:
     """Thin transparent proxy around a real GrowwAPI client that calls back
-    into TokenService after any method call succeeds, so "Last Successful
-    API Request" reflects actual usage across the whole app (Market Pulse's
-    account calls, Manual Trading, grid/positions/orders panels) rather
-    than only the handful of calls TokenService makes directly itself.
-    Never swallows an exception - a failed call just doesn't mark success."""
+    into TokenService after any method call succeeds OR fails, so both
+    "Last Successful API Request" AND connection_status reflect actual
+    usage across the whole app (Market Pulse's account calls, Manual
+    Trading, grid/positions/orders panels, reconciliation) rather than only
+    the handful of calls TokenService makes directly itself. This is what
+    makes "Groww Connected" a live signal instead of a value that's only
+    ever updated by an explicit Test Connection click - a token that
+    expires mid-session gets caught by the very next real call anyone in
+    the app makes through this client, not just a dedicated health check.
+    Never swallows an exception - it is always re-raised after being
+    reported, so callers see the real failure."""
 
-    def __init__(self, client: GrowwAPI, on_success: Any) -> None:
+    def __init__(self, client: GrowwAPI, on_success: Any, on_failure: Any) -> None:
         self._client = client
         self._on_success = on_success
+        self._on_failure = on_failure
 
     def __getattr__(self, name: str) -> Any:
         attribute = getattr(self._client, name)
@@ -77,7 +104,11 @@ class _TrackedClient:
             return attribute
 
         def _tracked(*args: Any, **kwargs: Any) -> Any:
-            result = attribute(*args, **kwargs)
+            try:
+                result = attribute(*args, **kwargs)
+            except _GROWW_CALL_ERRORS as error:
+                self._on_failure(error)
+                raise
             self._on_success()
             return result
 
@@ -154,7 +185,7 @@ class TokenService:
             raise BrokerNotConnectedError(
                 self._last_error or "Groww is not connected. Configure it in API Management."
             )
-        return _TrackedClient(self._client, self.mark_successful_request)  # type: ignore[return-value]
+        return _TrackedClient(self._client, self.mark_successful_request, self.mark_failed_request)  # type: ignore[return-value]
 
     def mark_successful_request(self) -> None:
         """Called by broker-facing code after any real Groww API call
@@ -164,23 +195,72 @@ class TokenService:
         observability."""
         self._last_successful_request_at = datetime.now(IST)
 
-    def status(self) -> BrokerStatus:
+    def mark_failed_request(self, error: Exception) -> None:
+        """Called by _TrackedClient after ANY real Groww call made anywhere
+        in the app fails - this is what keeps connection_status genuinely
+        live instead of a stale CONNECTED left over from whenever the
+        connection was last explicitly tested. An auth-specific failure
+        means the token itself is now confirmed bad (expired if it was
+        previously validated at least once, invalid if it never was) and
+        the client is discarded so no further call can be attempted against
+        a token already known to be dead. A non-auth failure (timeout,
+        network error, unexpected response) doesn't indict the token
+        itself, so the client is kept - a transient blip shouldn't force a
+        real reconnect. Only writes to the DB/audit log on an actual status
+        transition, not on every repeated failure while already broken."""
+        previous_status = self._connection_status
+        self._last_error = self._safe_message(error)
+        if isinstance(error, GrowwAPIAuthenticationException):
+            self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
+            self._client = None
+        else:
+            self._connection_status = "ERROR"
+        if self._connection_status != previous_status:
+            self._record_event("CONNECTION_LOST", status="FAILED", error_message=self._last_error)
+            self._persist()
+
+    def _compute_token_status(self) -> str:
+        """ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE - always
+        derived from connection_status (real evidence) first. The estimated
+        daily-reset clock only ever adds an early EXPIRING_SOON/EXPIRED
+        warning on top of an otherwise-CONNECTED state; it never overrides
+        connection_status itself (see the module docstring on
+        _estimate_token_expiry) - the next real call self-corrects it
+        either way, typically within seconds given how often this app
+        polls the broker."""
+        # A confirmed-bad result (real evidence) always wins, even when the
+        # rejected credentials themselves were never stored (a failed
+        # update attempt) - "no credential on file" and "the credential you
+        # just tried was rejected" are different, and the latter is the
+        # more informative/accurate thing to show.
+        if self._connection_status == "TOKEN_INVALID":
+            return "INVALID"
+        if self._connection_status == "TOKEN_EXPIRED":
+            return "EXPIRED"
         has_any_credential = bool(self._access_token or (self._api_key and self._api_secret))
         if not has_any_credential:
-            token_status = "MISSING"
-        elif self._connection_status == "TOKEN_EXPIRED":
-            token_status = "EXPIRED"
-        else:
-            token_status = "ACTIVE"
+            return "UNAVAILABLE"
+        if self._connection_status != "CONNECTED":
+            return "UNAVAILABLE"
+        if self._token_expiry_at is not None:
+            remaining_seconds = (self._token_expiry_at - datetime.now(IST)).total_seconds()
+            if remaining_seconds <= 0:
+                return "EXPIRED"
+            if remaining_seconds <= _EXPIRING_SOON_WINDOW_MINUTES * 60:
+                return "EXPIRING_SOON"
+        return "ACTIVE"
+
+    def status(self) -> BrokerStatus:
         return BrokerStatus(
             broker=BROKER_NAME,
             api_key_masked=credential_manager.mask_key(self._api_key),
             api_secret_masked=credential_manager.mask_secret(self._api_secret),
             access_token_masked=credential_manager.mask_secret(self._access_token),
-            token_status=token_status,
+            token_status=self._compute_token_status(),
             connection_status=self._connection_status,
             token_created_at=self._token_created_at,
             token_expiry_at=self._token_expiry_at,
+            token_expiry_is_estimated=True,
             last_validated_at=self._last_validated_at,
             last_successful_request_at=self._last_successful_request_at,
             last_error=self._last_error,
@@ -243,6 +323,24 @@ class TokenService:
             token_reference=token_reference, error_message=error_message,
         )
 
+    def _set_fresh_token_lifecycle(self) -> None:
+        """A genuinely new token value was just minted or supplied - resets
+        the creation clock and recomputes the estimated expiry from it."""
+        self._token_created_at = datetime.now(IST)
+        self._token_expiry_at = _estimate_token_expiry(self._token_created_at)
+
+    def _ensure_token_lifecycle_initialized(self) -> None:
+        """The same previously-known token was just re-validated (e.g. at
+        app startup, re-using a stored/env token) - never slides the
+        creation clock forward on every restart of an already-known token.
+        Also backfills a missing expiry estimate from an existing creation
+        time (covers credentials persisted before this feature existed,
+        when token_expiry_at was always stored as None)."""
+        if self._token_created_at is None:
+            self._set_fresh_token_lifecycle()
+        elif self._token_expiry_at is None:
+            self._token_expiry_at = _estimate_token_expiry(self._token_created_at)
+
     def _handle_failed_activation(self, error: Exception) -> str:
         """A failed *update* attempt (new token/credentials that turned out
         to be bad) must never clobber an already-working connection -
@@ -253,9 +351,10 @@ class TokenService:
         existing good connection marked CONNECTED."""
         message = self._safe_message(error)
         if self._client is None:
-            self._connection_status = (
-                "TOKEN_EXPIRED" if isinstance(error, GrowwAPIAuthenticationException) else "ERROR"
-            )
+            if isinstance(error, GrowwAPIAuthenticationException):
+                self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
+            else:
+                self._connection_status = "ERROR"
         self._last_error = message
         return message
 
@@ -279,8 +378,7 @@ class TokenService:
             )
             self._persist()
             raise BrokerValidationError(message) from error
-        self._token_created_at = datetime.now(IST)
-        self._token_expiry_at = None  # Groww does not publish a fixed access-token lifetime
+        self._set_fresh_token_lifecycle()
         self._persist()
         self._record_event(
             "TOKEN_UPDATED", status="SUCCESS", token_reference=credential_manager.reference_hint(raw_token),
@@ -309,8 +407,7 @@ class TokenService:
             raise BrokerValidationError(message) from error
         self._api_key = api_key
         self._api_secret = api_secret
-        self._token_created_at = datetime.now(IST)
-        self._token_expiry_at = None
+        self._set_fresh_token_lifecycle()
         self._persist()
         self._record_event(
             "CREDENTIALS_UPDATED", status="SUCCESS", token_reference=credential_manager.reference_hint(api_key),
@@ -334,9 +431,11 @@ class TokenService:
                 raise TypeError("Unexpected response validating the Groww connection.")
         except _GROWW_CALL_ERRORS as error:
             message = self._safe_message(error)
-            self._connection_status = (
-                "TOKEN_EXPIRED" if isinstance(error, GrowwAPIAuthenticationException) else "ERROR"
-            )
+            if isinstance(error, GrowwAPIAuthenticationException):
+                self._connection_status = "TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID"
+                self._client = None
+            else:
+                self._connection_status = "ERROR"
             self._last_error = message
             self._record_event("VALIDATION_FAILED", status="FAILED", error_message=message)
             self._persist()
@@ -363,6 +462,7 @@ class TokenService:
         if self._access_token:
             try:
                 self._activate(self._access_token)
+                self._ensure_token_lifecycle_initialized()
                 self._record_event(
                     "AUTO_REFRESH_SUCCESS", status="SUCCESS",
                     token_reference=credential_manager.reference_hint(self._access_token),
@@ -372,13 +472,14 @@ class TokenService:
             except _GROWW_CALL_ERRORS as error:
                 self._last_error = self._safe_message(error)
                 self._connection_status = (
-                    "TOKEN_EXPIRED" if isinstance(error, GrowwAPIAuthenticationException) else "ERROR"
+                    ("TOKEN_EXPIRED" if self._last_validated_at else "TOKEN_INVALID")
+                    if isinstance(error, GrowwAPIAuthenticationException) else "ERROR"
                 )
         if self._api_key and self._api_secret:
             try:
                 token = GrowwAPI.get_access_token(api_key=self._api_key, secret=self._api_secret)
                 self._activate(token)
-                self._token_created_at = datetime.now(IST)
+                self._set_fresh_token_lifecycle()
                 self._record_event(
                     "AUTO_REFRESH_SUCCESS", status="SUCCESS", token_reference=credential_manager.reference_hint(token),
                 )

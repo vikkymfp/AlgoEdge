@@ -10,3 +10,7 @@ data/*.csv
 data/*.json
 logs/*.log
 .vscode/*.log
+node_modules/
+playwright-report/
+test-results/
+.playwright-cache/

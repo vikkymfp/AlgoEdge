@@ -51,9 +51,9 @@
           </a>
 
           <span class="rail-divider" aria-hidden="true"></span>
-          <a class="rail-link" href="#account-api" title="API Diagnostics">
+          <a class="rail-link" href="#account-api" title="Broker Diagnostics">
             <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
-            <small>API</small>
+            <small>Diagnostics</small>
           </a>
           <a class="rail-link" href="#broker-panel" title="API Management">
             <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
@@ -781,23 +781,64 @@
           </div>
         </section>
 
-        <section class="api-section" id="account-api" aria-label="Available API data" hidden>
+        <section class="api-section" id="account-api" aria-label="Broker diagnostics" hidden>
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Broker data &middot; read-only diagnostics, not credential management</p>
-              <h2>API Diagnostics</h2>
+              <p class="eyebrow">Broker integration diagnostics &middot; read-only, no trading controls</p>
+              <h2>Broker Diagnostics</h2>
             </div>
             <span class="source-label" id="accountSource">Loading account data</span>
           </div>
-          <div class="account-summary" id="accountSummary"></div>
-          <div class="api-panels">
-            <details class="api-panel" open><summary>Profile and permissions</summary><div id="profileData"></div></details>
-            <details class="api-panel" open><summary>Margin and funds</summary><div id="marginData"></div></details>
-            <details class="api-panel"><summary>Holdings <span id="holdingsCount">0</span></summary><div id="holdingsData"></div></details>
-            <details class="api-panel"><summary>All positions <span id="positionsCount">0</span></summary><div id="positionsData"></div></details>
-            <details class="api-panel"><summary>Orders and trades <span id="ordersDataCount">0</span></summary><div id="ordersData"></div></details>
-            <details class="api-panel"><summary>Instrument master and live-data permissions</summary><div id="instrumentData"></div></details>
+
+          <div class="system-status-row" id="diagnosticsStatusRow">
+            <div class="system-status-item" id="diagApiConnection">
+              <span>API Connection</span>
+              <strong><i class="status-dot"></i>Checking&hellip;</strong>
+              <small id="diagApiConnectionDetail"></small>
+            </div>
+            <div class="system-status-item" id="diagAccountData">
+              <span>Account Data</span>
+              <strong><i class="status-dot"></i>Checking&hellip;</strong>
+              <small id="diagAccountDataDetail"></small>
+            </div>
+            <div class="system-status-item" id="diagMarketData">
+              <span>Market Data</span>
+              <strong><i class="status-dot"></i>Checking&hellip;</strong>
+              <small id="diagMarketDataDetail"></small>
+            </div>
+            <div class="system-status-item" id="diagInstrumentMaster">
+              <span>Instrument Master</span>
+              <strong><i class="status-dot"></i>Checking&hellip;</strong>
+              <small id="diagInstrumentMasterDetail"></small>
+            </div>
           </div>
+
+          <div class="api-panels">
+            <div class="api-column">
+              <details class="api-panel" open>
+                <summary>Connection &amp; Permissions <span class="status-tag" id="diagProfileTag"></span></summary>
+                <div id="profileData"></div>
+              </details>
+              <details class="api-panel">
+                <summary>Holdings &amp; Positions <span id="holdingsPositionsCount">0</span> <span class="status-tag" id="diagHoldingsPositionsTag"></span></summary>
+                <div id="holdingsPositionsData"></div>
+              </details>
+              <details class="api-panel">
+                <summary>Instrument Master &amp; Market Data <span class="status-tag" id="diagInstrumentTag"></span></summary>
+                <div id="instrumentMarketData"></div>
+              </details>
+            </div>
+            <div class="api-column">
+              <details class="api-panel" open>
+                <summary>Funds &amp; Margin <span class="status-tag" id="diagMarginTag"></span></summary>
+                <div id="marginData"></div>
+              </details>
+            </div>
+          </div>
+          <details class="api-panel api-panel-full">
+            <summary>Orders &amp; Trades <span id="ordersDataCount">0</span> <span class="status-tag" id="diagOrdersTag"></span></summary>
+            <div id="ordersData"></div>
+          </details>
         </section>
 
         <section class="panel broker-panel" id="broker-panel" aria-label="API Management" hidden>
@@ -857,6 +898,7 @@
             <dt>Token status</dt><dd id="brokerTokenStatus">—</dd>
             <dt>Token created</dt><dd id="brokerTokenCreatedAt">—</dd>
             <dt>Token expiry</dt><dd id="brokerTokenExpiryAt">Not published by Groww for this auth method</dd>
+            <dt>Time remaining</dt><dd id="brokerTokenTimeRemaining">—</dd>
             <dt>Last validated</dt><dd id="brokerLastValidatedAt">—</dd>
             <dt>Last successful API request</dt><dd id="brokerLastSuccessAt">—</dd>
             <dt>Last error</dt><dd id="brokerLastError">—</dd>
@@ -896,7 +938,11 @@
             </div>
           </div>
           <div class="system-status-row">
-            <div class="system-status-item" id="healthDatabase"><span>Database</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
+            <div class="system-status-item" id="healthDatabase">
+              <span>Database</span>
+              <strong><i class="status-dot"></i>Checking&hellip;</strong>
+              <small id="healthDatabaseDetail"></small>
+            </div>
             <div class="system-status-item" id="healthBroker"><span>Groww API</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
             <div class="system-status-item" id="healthReconciliation"><span>Reconciliation</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
             <div class="system-status-item" id="healthRisk"><span>Risk engine</span><strong><i class="status-dot"></i>Checking&hellip;</strong></div>
@@ -918,35 +964,55 @@
             </div>
           </div>
 
-          <nav class="index-tabs" id="backtestIndexTabs" aria-label="Backtest index"></nav>
-
-          <div class="trade-form backtest-form">
-            <div class="trade-field">
-              <label for="backtestInterval">Timeframe</label>
-              <select id="backtestInterval">
-                <option value="1m">1m (~7 days)</option>
-                <option value="5m" selected>5m (~60 days)</option>
-                <option value="15m">15m (~60 days)</option>
-                <option value="1h">1h (~2 years)</option>
-                <option value="1d">1D (~5 years)</option>
-              </select>
-            </div>
-            <div class="trade-field">
-              <label for="backtestSlippage">Assumed slippage (points)</label>
-              <input type="number" id="backtestSlippage" min="0" step="0.5" value="0" />
-            </div>
-            <div class="trade-field">
-              <span class="trade-field-label">Mode</span>
-              <div class="segmented" id="backtestModeToggle">
-                <button type="button" class="segmented-option active" data-mode="single">Full period</button>
-                <button type="button" class="segmented-option" data-mode="split">Train / validation / out-of-sample</button>
+          <div class="backtest-control-bar">
+            <nav class="index-tabs" id="backtestIndexTabs" aria-label="Backtest index"></nav>
+            <div class="backtest-control-fields">
+              <div class="trade-field">
+                <label for="backtestInterval">Timeframe</label>
+                <select id="backtestInterval">
+                  <option value="1m">1m (~7 days)</option>
+                  <option value="5m" selected>5m (~60 days)</option>
+                  <option value="15m">15m (~60 days)</option>
+                  <option value="1h">1h (~2 years)</option>
+                  <option value="1d">1D (~5 years)</option>
+                </select>
               </div>
+              <div class="trade-field">
+                <label for="backtestSlippage">Slippage (pts)</label>
+                <input type="number" id="backtestSlippage" min="0" step="0.5" value="0" />
+              </div>
+              <div class="trade-field">
+                <span class="trade-field-label">Mode</span>
+                <div class="segmented" id="backtestModeToggle">
+                  <button type="button" class="segmented-option active" data-mode="single">Full period</button>
+                  <button type="button" class="segmented-option" data-mode="split">Train / Validation / OOS</button>
+                </div>
+              </div>
+              <button class="text-button-solid backtest-run-button" type="button" id="backtestRunButton">Run Backtest</button>
+            </div>
+            <div class="backtest-meta-row" id="backtestMetaRow" hidden>
+              <span><strong>Symbol</strong><em id="backtestMetaSymbol">&mdash;</em></span>
+              <span><strong>Data source</strong><em>Yahoo Finance (free feed)</em></span>
+              <span><strong>Date range</strong><em id="backtestMetaRange">&mdash;</em></span>
+              <span><strong>Candles</strong><em id="backtestMetaCandles">&mdash;</em></span>
+              <span><strong>Slippage</strong><em id="backtestMetaSlippage">&mdash;</em></span>
             </div>
           </div>
 
-          <button class="text-button-solid" type="button" id="backtestRunButton">Run backtest</button>
-
           <p class="strategy-disclaimer" id="backtestDisclaimer"></p>
+
+          <div class="backtest-export-bar" id="backtestExportBar" hidden>
+            <button class="text-button" type="button" id="backtestClearButton">Clear</button>
+            <span class="backtest-export-label">Export this result</span>
+            <button class="text-button-solid" type="button" id="backtestExportXlsx">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v13m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download Excel
+            </button>
+            <button class="text-button-solid" type="button" id="backtestExportPdf">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 3v13m0 0l-4-4m4 4l4-4M5 21h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Download PDF
+            </button>
+          </div>
 
           <div id="backtestResult">
             <p class="data-empty">Run a backtest to see results.</p>

@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
@@ -19,6 +19,7 @@ from algoedge.backtest import (
     pair_trades,
     split_train_validation_test,
 )
+from algoedge.backtest_export import build_excel_report, build_pdf_report
 from algoedge.config import get_settings
 from algoedge.cost_model import CostModel
 from algoedge.daily_summary import aggregate_period_summary, compute_daily_summary
@@ -1027,6 +1028,7 @@ def _broker_status_payload() -> dict:
         "connectionStatus": status.connection_status,
         "tokenCreatedAt": status.token_created_at,
         "tokenExpiryAt": status.token_expiry_at,
+        "tokenExpiryIsEstimated": status.token_expiry_is_estimated,
         "lastValidatedAt": status.last_validated_at,
         "lastSuccessfulRequestAt": status.last_successful_request_at,
         "lastError": status.last_error,
@@ -1135,38 +1137,67 @@ def _backtest_metrics_payload(metrics) -> dict:
     }
 
 
-@app.get("/api/backtest/run")
-def backtest_run(
-    index_id: str, interval: str = "5m", period: str | None = None,
-    assumed_slippage_points: float = 0.0, split: bool = False,
+def _backtest_trades_payload(trades: list) -> list[dict]:
+    return [
+        {
+            "entryTime": trade.entry_time.isoformat() if hasattr(trade.entry_time, "isoformat") else str(trade.entry_time),
+            "exitTime": trade.exit_time.isoformat() if hasattr(trade.exit_time, "isoformat") else str(trade.exit_time),
+            "direction": trade.direction,
+            "entryPrice": trade.entry_price,
+            "exitPrice": trade.exit_price,
+            "exitReason": trade.exit_reason,
+            "points": trade.points,
+            "strike": trade.strike,
+            "optionSymbol": trade.option_symbol,
+        }
+        for trade in sorted(trades, key=lambda t: t.entry_time)
+    ]
+
+
+def _run_backtest_segment(data, strategy_config, index_config, assumed_slippage_points: float) -> dict:
+    """Runs the strategy against one contiguous slice of underlying data.
+    The single place both /api/backtest/run and the Excel/PDF export
+    endpoints build from, so an export can never drift from what the
+    dashboard itself shows for the same parameters."""
+    _results, events = run_strategy(data, strategy_config, underlying_label=index_config.name)
+    trades = pair_trades(events, assumed_slippage_points=assumed_slippage_points)
+    regime_labels = compute_regime_labels(data)
+    metrics = compute_backtest_metrics(trades, regime_labels)
+    return {
+        "candleCount": len(data),
+        "metrics": _backtest_metrics_payload(metrics),
+        "trades": _backtest_trades_payload(trades),
+    }
+
+
+_BACKTEST_DISCLAIMER = (
+    "Points-based backtest on the UNDERLYING's own price - NOT a rupee option-premium P&L "
+    "(this account's Groww tier has no historical option-quote data). A real diagnostic of "
+    "entry/exit timing quality, not validated real-money profitability. Past performance never "
+    "guarantees future results."
+)
+
+
+def _compute_backtest_payload(
+    index_id: str, interval: str, period: str | None, assumed_slippage_points: float, split: bool,
 ) -> dict:
-    """Runs the real fno_signals strategy against historical underlying
-    data and reports points-based (NOT rupee option-premium) metrics - see
-    algoedge/backtest.py's module docstring for why. Never places an
-    order or touches Groww; purely a read of yfinance history."""
     if interval not in BACKTEST_TIMEFRAMES:
         raise HTTPException(status_code=400, detail=f"Unsupported interval: {interval}")
     index_config = _index_config_for(index_id)
     default_period, yf_interval = BACKTEST_TIMEFRAMES[interval]
     data = fetch_underlying_data(index_config.ticker, period=period or default_period, interval=yf_interval)
     strategy_config = strategy_config_for(index_config)
-    disclaimer = (
-        "Points-based backtest on the UNDERLYING's own price - NOT a rupee option-premium P&L "
-        "(this account's Groww tier has no historical option-quote data). A real diagnostic of "
-        "entry/exit timing quality, not validated real-money profitability. Past performance never "
-        "guarantees future results."
-    )
+
+    base = {
+        "indexId": index_id, "indexName": index_config.name, "interval": interval,
+        "period": period or default_period, "candleCount": len(data),
+        "assumedSlippagePoints": assumed_slippage_points, "disclaimer": _BACKTEST_DISCLAIMER,
+        "split": split,
+    }
 
     if not split:
-        _results, events = run_strategy(data, strategy_config, underlying_label=index_config.name)
-        trades = pair_trades(events, assumed_slippage_points=assumed_slippage_points)
-        regime_labels = compute_regime_labels(data)
-        metrics = compute_backtest_metrics(trades, regime_labels)
-        return {
-            "indexId": index_id, "interval": interval, "period": period or default_period,
-            "candleCount": len(data), "assumedSlippagePoints": assumed_slippage_points,
-            "disclaimer": disclaimer, "metrics": _backtest_metrics_payload(metrics),
-        }
+        segment = _run_backtest_segment(data, strategy_config, index_config, assumed_slippage_points)
+        return {**base, "metrics": segment["metrics"], "trades": segment["trades"]}
 
     # Anti-overfitting (spec section 34): a strategy that only performs
     # well on one slice of history isn't production-ready - report train/
@@ -1176,19 +1207,58 @@ def backtest_run(
     split_results = {}
     for split_name, split_data in splits.items():
         if len(split_data) < 10:
-            split_results[split_name] = {"candleCount": len(split_data), "metrics": None}
+            split_results[split_name] = {"candleCount": len(split_data), "metrics": None, "trades": []}
             continue
-        _results, events = run_strategy(split_data, strategy_config, underlying_label=index_config.name)
-        trades = pair_trades(events, assumed_slippage_points=assumed_slippage_points)
-        regime_labels = compute_regime_labels(split_data)
-        metrics = compute_backtest_metrics(trades, regime_labels)
-        split_results[split_name] = {"candleCount": len(split_data), "metrics": _backtest_metrics_payload(metrics)}
+        split_results[split_name] = _run_backtest_segment(
+            split_data, strategy_config, index_config, assumed_slippage_points,
+        )
+    return {**base, "splits": split_results}
 
-    return {
-        "indexId": index_id, "interval": interval, "period": period or default_period,
-        "candleCount": len(data), "assumedSlippagePoints": assumed_slippage_points,
-        "disclaimer": disclaimer, "splits": split_results,
-    }
+
+@app.get("/api/backtest/run")
+def backtest_run(
+    index_id: str, interval: str = "5m", period: str | None = None,
+    assumed_slippage_points: float = 0.0, split: bool = False,
+) -> dict:
+    """Runs the real fno_signals strategy against historical underlying
+    data and reports points-based (NOT rupee option-premium) metrics - see
+    algoedge/backtest.py's module docstring for why. Never places an
+    order or touches Groww; purely a read of yfinance history."""
+    return _compute_backtest_payload(index_id, interval, period, assumed_slippage_points, split)
+
+
+@app.get("/api/backtest/export/xlsx")
+def backtest_export_xlsx(
+    index_id: str, interval: str = "5m", period: str | None = None,
+    assumed_slippage_points: float = 0.0, split: bool = False,
+) -> Response:
+    """Formats the exact same backtest computation as /api/backtest/run
+    into a workbook - never a separate/re-derived calculation."""
+    payload = _compute_backtest_payload(index_id, interval, period, assumed_slippage_points, split)
+    content = build_excel_report(payload)
+    filename = f"algoedge-backtest-{index_id}-{interval}.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/backtest/export/pdf")
+def backtest_export_pdf(
+    index_id: str, interval: str = "5m", period: str | None = None,
+    assumed_slippage_points: float = 0.0, split: bool = False,
+) -> Response:
+    """Formats the exact same backtest computation as /api/backtest/run
+    into a PDF report - never a separate/re-derived calculation."""
+    payload = _compute_backtest_payload(index_id, interval, period, assumed_slippage_points, split)
+    content = build_pdf_report(payload)
+    filename = f"algoedge-backtest-{index_id}-{interval}.pdf"
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/system/health")
@@ -1215,8 +1285,14 @@ def system_health() -> dict:
         ) if t is not None),
         default=None,
     )
+    db_check = db.check_connection()
     return {
-        "database": {"status": "HEALTHY" if db.is_available() else "UNAVAILABLE"},
+        "database": {
+            "status": "CONNECTED" if db_check["connected"] else "DISCONNECTED",
+            "databaseName": db_check["databaseName"],
+            "error": db_check["error"],
+            "lastSuccessfulCheckAt": db_check["lastSuccessfulCheckAt"],
+        },
         "broker": {
             "status": "CONNECTED" if token_service.is_connected() else broker.connection_status,
         },

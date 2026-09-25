@@ -43,6 +43,9 @@ class FakeClient:
 
 @pytest.fixture(autouse=True)
 def clear_instruments_cache():
+    # This file's own list_expiries()/list_strikes() cache - separate from
+    # fno_signals.broker's cache that resolve_manual_contract() actually
+    # delegates to, which conftest.py's session-wide fixture clears.
     _instruments_cache.clear()
     yield
     _instruments_cache.clear()
