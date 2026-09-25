@@ -1023,12 +1023,16 @@ def _broker_status_payload() -> dict:
         "broker": status.broker.upper(),
         "apiKeyMasked": status.api_key_masked,
         "apiSecretMasked": status.api_secret_masked,
-        "accessTokenMasked": status.access_token_masked,
-        "tokenStatus": status.token_status,
+        # The API key/secret are the persistent credentials. The access
+        # token is session state generated from them, so it is never shown
+        # as a credential - only the session's status and lifecycle are.
+        "authMode": status.auth_mode,
+        "autoReauthAvailable": status.auto_reauth_available,
+        "sessionStatus": status.token_status,
         "connectionStatus": status.connection_status,
-        "tokenCreatedAt": status.token_created_at,
-        "tokenExpiryAt": status.token_expiry_at,
-        "tokenExpiryIsEstimated": status.token_expiry_is_estimated,
+        "sessionCreatedAt": status.token_created_at,
+        "sessionExpiresAt": status.token_expiry_at,
+        "sessionExpiryIsEstimated": status.token_expiry_is_estimated,
         "lastValidatedAt": status.last_validated_at,
         "lastSuccessfulRequestAt": status.last_successful_request_at,
         "lastError": status.last_error,
@@ -1096,6 +1100,20 @@ def broker_update_access_token(request: AccessTokenUpdateRequest) -> dict:
     except BrokerValidationError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
     return _broker_update_payload()
+
+
+@app.post("/api/broker/reauthenticate")
+def broker_reauthenticate() -> dict:
+    """Generates a new session from the stored API key/secret right away
+    (e.g. after approving API access in the Groww app). Never places an
+    order."""
+    try:
+        token_service.reauthenticate()
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except BrokerValidationError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+    return _broker_status_payload()
 
 
 @app.post("/api/broker/test-connection")

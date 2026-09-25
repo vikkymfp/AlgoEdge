@@ -280,7 +280,8 @@ def test_raw_token_never_appears_in_status_masked_fields(monkeypatch) -> None:
     service.update_access_token(REAL_SECRET)
     status = service.status()
 
-    assert REAL_SECRET not in (status.access_token_masked or "")
+    assert not hasattr(status, "access_token_masked")  # the session token is never displayed
+    assert REAL_SECRET not in repr(status)
     assert REAL_SECRET not in (status.api_key_masked or "")
     assert REAL_SECRET not in (status.api_secret_masked or "")
 

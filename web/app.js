@@ -151,7 +151,7 @@ function renderPositionsBrokerCard() {
 
   document.querySelector('#posBrokerDetailsGrid').innerHTML = [
     ['Connection', status.connectionStatus || '—'],
-    ['Token status', status.tokenStatus || '—'],
+    ['Session status', status.sessionStatus || '—'],
     ['Active segments', (profile.activeSegments || []).join(', ') || '—'],
     ['Holdings', (account.holdings || []).length],
     ['Available margin (equity)', margin.equity_margin_details?.clear_cash != null ? money(margin.equity_margin_details.clear_cash) : '—'],
@@ -213,7 +213,11 @@ function renderAccount(account, fetchSucceeded = true) {
     renderDiagnosticCard('diagApiConnection', 'ok', 'CONNECTED', 'Groww session is active');
   } else if (brokerStatus) {
     renderDiagnosticCard('diagApiConnection', 'warning', 'UNAVAILABLE',
-      brokerStatus === 'TOKEN_EXPIRED' ? 'Access token expired — update it on the Broker page' : `Session status: ${brokerStatus}`);
+      brokerStatus === 'TOKEN_EXPIRED'
+        ? (lastBrokerStatusPayload?.autoReauthAvailable
+          ? 'Groww session expired — a new one is generated automatically from your API key & secret'
+          : 'Groww session expired — add an API key & secret on the Broker page')
+        : `Session status: ${brokerStatus}`);
   } else {
     renderDiagnosticCard('diagApiConnection', 'warning', 'UNAVAILABLE', 'Checking broker connection…');
   }
@@ -1735,7 +1739,7 @@ const TOKEN_STATUS_CLASS = { ACTIVE: 'positive', EXPIRING_SOON: 'warning', EXPIR
 // Groww doesn't publish a real expiry timestamp (see token_service.py's
 // _estimate_token_expiry) - this is always an estimate based on the known
 // ~6am IST daily reset, computed client-side purely from the already-
-// fetched tokenExpiryAt so it stays live between the 20s broker-status
+// fetched sessionExpiresAt so it stays live between the 20s broker-status
 // refreshes without a new request.
 function formatTimeRemaining(expiryAtIso) {
   if (!expiryAtIso) return null;
@@ -1752,28 +1756,40 @@ function formatTimeRemaining(expiryAtIso) {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
+const BROKER_AUTH_MODE_LABEL = {
+  API_KEY_SECRET: 'Generated from API key & secret — renewed automatically',
+  MANUAL_TOKEN: 'Pasted session token — not renewed automatically',
+  NONE: 'Not configured — add an API key & secret',
+};
+
 function renderBrokerStatus(status) {
   lastBrokerStatusPayload = status;
   renderPositionsBrokerCard();
   document.querySelector('#brokerApiKeyMasked').textContent = status.apiKeyMasked || 'Not configured';
   document.querySelector('#brokerApiSecretMasked').textContent = status.apiSecretMasked || 'Not configured';
-  document.querySelector('#brokerAccessTokenMasked').textContent = status.accessTokenMasked || 'Not configured';
+  // The access token is session state generated from the key/secret, so
+  // only where the current session comes from is shown - never the token.
+  document.querySelector('#brokerAuthMode').textContent = BROKER_AUTH_MODE_LABEL[status.authMode] || '—';
+  document.querySelector('#brokerReauthButton').hidden = !status.autoReauthAvailable;
 
   const connectionTag = document.querySelector('#brokerConnectionTag');
   connectionTag.textContent = status.connectionStatus;
   connectionTag.className = `status-tag ${brokerConnectionTagClass(status.connectionStatus)}`;
 
   const tokenStatusEl = document.querySelector('#brokerTokenStatus');
-  tokenStatusEl.textContent = status.tokenStatus;
-  tokenStatusEl.className = TOKEN_STATUS_CLASS[status.tokenStatus] || '';
+  tokenStatusEl.textContent = status.sessionStatus;
+  tokenStatusEl.className = TOKEN_STATUS_CLASS[status.sessionStatus] || '';
 
-  document.querySelector('#brokerTokenCreatedAt').textContent = formatTimestamp(status.tokenCreatedAt);
-  document.querySelector('#brokerTokenExpiryAt').textContent = status.tokenExpiryAt
-    ? `${formatTimestamp(status.tokenExpiryAt)}${status.tokenExpiryIsEstimated ? ' (estimated — Groww resets tokens daily ~6:00 AM IST)' : ''}`
+  document.querySelector('#brokerTokenCreatedAt').textContent = formatTimestamp(status.sessionCreatedAt);
+  const renewalNote = status.autoReauthAvailable
+    ? '; a new session is generated automatically from your API key & secret'
+    : '; a pasted session token is not renewed automatically';
+  document.querySelector('#brokerTokenExpiryAt').textContent = status.sessionExpiresAt
+    ? `${formatTimestamp(status.sessionExpiresAt)}${status.sessionExpiryIsEstimated ? ` (estimated — Groww sessions reset daily ~6:00 AM IST${renewalNote})` : ''}`
     : 'Not published by Groww for this auth method';
 
   // No usable token right now - a countdown would imply one exists.
-  const remaining = status.tokenStatus === 'UNAVAILABLE' ? null : formatTimeRemaining(status.tokenExpiryAt);
+  const remaining = status.sessionStatus === 'UNAVAILABLE' ? null : formatTimeRemaining(status.sessionExpiresAt);
   const remainingEl = document.querySelector('#brokerTokenTimeRemaining');
   remainingEl.textContent = remaining || '—';
   remainingEl.className = remaining && remaining.startsWith('Expired') ? 'warning' : '';
@@ -1800,10 +1816,10 @@ function renderBrokerStatus(status) {
     pill.innerHTML = '<i></i>Groww Connected';
   } else if (status.connectionStatus === 'TOKEN_EXPIRED') {
     pill.classList.add('warning');
-    pill.innerHTML = '<i></i>Token Expired';
+    pill.innerHTML = '<i></i>Session Expired';
   } else if (status.connectionStatus === 'TOKEN_INVALID') {
     pill.classList.add('danger');
-    pill.innerHTML = '<i></i>Invalid Credentials';
+    pill.innerHTML = '<i></i>Authentication Failed';
   } else if (status.connectionStatus === 'MISSING') {
     pill.classList.add('warning');
     pill.innerHTML = '<i></i>Groww Not Configured';
@@ -1833,7 +1849,7 @@ async function loadBrokerStatus() {
 function renderBrokerHistoryTable(events) {
   const body = document.querySelector('#brokerHistoryBody');
   if (events.length === 0) {
-    body.innerHTML = '<tr class="empty-row"><td colspan="5">No token/credential events recorded yet.</td></tr>';
+    body.innerHTML = '<tr class="empty-row"><td colspan="5">No credential/session events recorded yet.</td></tr>';
     return;
   }
   body.innerHTML = events.map((event) => `
@@ -1854,7 +1870,7 @@ async function loadBrokerHistory() {
     const payload = await response.json();
     renderBrokerHistoryTable(payload.events || []);
   } catch {
-    document.querySelector('#brokerHistoryBody').innerHTML = '<tr class="empty-row"><td colspan="5">Could not load token history.</td></tr>';
+    document.querySelector('#brokerHistoryBody').innerHTML = '<tr class="empty-row"><td colspan="5">Could not load credential/session history.</td></tr>';
   }
 }
 
@@ -1893,7 +1909,7 @@ function brokerActionResultView(result, connectionStatus) {
     return {
       text: result.persisted
         ? `${result.label} validated and saved. Connected.`
-        : `${result.label} validated for this session only (not saved). Connected.`,
+        : `${result.label} validated but not saved (kept until the app restarts). Connected.`,
       tone: 'positive',
     };
   }
@@ -1901,12 +1917,12 @@ function brokerActionResultView(result, connectionStatus) {
     return {
       text: result.persisted
         ? 'Credentials saved, but broker connection is currently unavailable.'
-        : 'Credentials applied for this session only, but broker connection is currently unavailable.',
+        : 'Credentials applied until the app restarts (not saved), but broker connection is currently unavailable.',
       tone: 'warning',
     };
   }
   // Reconnected later, but not by this action's validation.
-  return { text: result.persisted ? 'Credentials saved.' : 'Credentials applied for this session only.', tone: '' };
+  return { text: result.persisted ? 'Credentials saved.' : 'Credentials applied until the app restarts (not saved).', tone: '' };
 }
 
 function renderBrokerActionResult() {
@@ -1949,7 +1965,7 @@ function initBrokerPanel() {
       input.value = '';
       tokenForm.hidden = true;
       renderBrokerStatus(payload);
-      setBrokerActionResult({ kind: 'update', label: 'Access token', persisted: Boolean(payload.update?.persisted) });
+      setBrokerActionResult({ kind: 'update', label: 'Session token', persisted: Boolean(payload.update?.persisted) });
       await Promise.all([loadBrokerStatus(), loadBrokerHistory()]);
     } catch (error) {
       setBrokerActionResult({ kind: 'error', message: error.message || 'Token update failed.' });
@@ -1982,6 +1998,23 @@ function initBrokerPanel() {
       setBrokerActionResult({ kind: 'error', message: error.message || 'Credential update failed.' });
     } finally {
       submitButton.disabled = false;
+    }
+  });
+
+  document.querySelector('#brokerReauthButton').addEventListener('click', async () => {
+    const button = document.querySelector('#brokerReauthButton');
+    button.disabled = true;
+    try {
+      const response = await fetch('/api/broker/reauthenticate', { method: 'POST' });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.detail || 'Re-authentication failed');
+      renderBrokerStatus(payload);
+      setBrokerActionResult({ kind: 'update', label: 'New session', persisted: Boolean(payload.credentialsPersisted) });
+      await loadBrokerHistory();
+    } catch (error) {
+      setBrokerActionResult({ kind: 'error', message: error.message || 'Re-authentication failed.' });
+    } finally {
+      button.disabled = false;
     }
   });
 

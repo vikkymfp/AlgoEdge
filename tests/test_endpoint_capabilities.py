@@ -184,7 +184,7 @@ def test_the_reported_example_market_data_403_keeps_broker_connected(web_app, se
 
     status = web_server.broker_status()
     assert views() == {"CONNECTED"}
-    assert status["tokenStatus"] == "ACTIVE"
+    assert status["sessionStatus"] == "ACTIVE"
     assert status["manualTradingBlocked"] is False
     assert status["lastError"] is None
     assert status["capabilities"]["market_data"]["status"] == "UNAVAILABLE"

@@ -106,7 +106,7 @@ def test_token_save_then_connection_failure_reports_error_not_connected(sqlite_d
 
     status = web_server.broker_status()
     assert status["connectionStatus"] == "ERROR"
-    assert status["tokenStatus"] == "UNAVAILABLE"
+    assert status["sessionStatus"] == "UNAVAILABLE"
     assert status["lastError"] == GrowwAPITimeoutException().msg
     assert status["manualTradingBlocked"] is True
     assert all_views_connection_status() == {"ERROR"}
@@ -152,7 +152,7 @@ def test_connection_loss_after_successful_validation_updates_every_view(web_serv
     fail_next_call(web_service, GrowwAPIAuthenticationException())
 
     assert all_views_connection_status() == {"TOKEN_EXPIRED"}
-    assert web_server.broker_status()["tokenStatus"] == "EXPIRED"
+    assert web_server.broker_status()["sessionStatus"] == "EXPIRED"
     # Historical only: the earlier success is kept, but it doesn't make the
     # connection current.
     assert web_server.broker_status()["lastSuccessfulRequestAt"] is not None

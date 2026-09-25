@@ -22,16 +22,45 @@ from algoedge.risk_manager import IST
 
 logger = logging.getLogger("algoedge.token_service")
 
-# Groww access tokens reset daily around 6:00 AM IST - documented platform
-# behavior, not a value get_access_token()/get_user_profile() actually
-# publish anywhere in their response. This is therefore always an ESTIMATE
-# used for the "Time Remaining"/"Expiring Soon" UI warning - it never
-# substitutes for real detection. The authoritative signal (connection_status
-# below) is set only from an actual validation call succeeding or failing;
-# the estimate is never allowed to mark a connection CONNECTED or downgrade
-# it to TOKEN_EXPIRED on its own.
+# Credential model: the Groww API key + secret are the persistent
+# credentials. The access token is SESSION state minted from them by
+# GrowwAPI.get_access_token(api_key, secret=...) - growwapi POSTs
+# {"key_type": "approval", "checksum": sha256(secret + timestamp),
+# "timestamp": ...} to /v1/token/api/access with the key as Bearer and gets
+# back only a token string (no expiry). GrowwAPI(token) then sends that
+# token on every call and has no refresh logic of its own - an expired
+# session just starts failing with GrowwAPIAuthenticationException (401).
+# Re-authenticating (minting a new session from the key/secret) is
+# therefore this service's job - see _reauthenticate().
+#
+# Groww sessions reset daily around 6:00 AM IST - documented platform
+# behavior, not a value any response publishes. This is therefore always an
+# ESTIMATE, used for the "Time Remaining"/"Expiring Soon" UI warning and to
+# renew a key/secret session proactively once it has passed. It never
+# substitutes for real detection: connection_status is set only from an
+# actual call succeeding or failing - the estimate never marks a connection
+# CONNECTED or downgrades it to TOKEN_EXPIRED on its own, and a failed
+# proactive renewal keeps the still-working session.
 _TOKEN_DAILY_RESET_HOUR = 6
 _EXPIRING_SOON_WINDOW_MINUTES = 30
+# Minimum gap between automatic re-authentication attempts, so a key that
+# can't mint a session (e.g. Groww's daily approval not yet given) isn't
+# hammered by every poll. An explicit reauthenticate() ignores it.
+_REAUTH_COOLDOWN_SECONDS = 60
+
+# How the current session is obtained - see TokenService.auth_mode().
+AUTH_MODE_API_KEY_SECRET = "API_KEY_SECRET"  # minted from key/secret; renewed automatically
+AUTH_MODE_MANUAL_TOKEN = "MANUAL_TOKEN"  # a session token supplied directly (e.g. TOTP-type keys); no auto-renewal
+AUTH_MODE_NONE = "NONE"
+
+
+def _as_ist(value: datetime | None) -> datetime | None:
+    """Database DATETIME columns drop the timezone but keep the IST wall
+    time these values were written with - restore it, so they compare
+    safely with datetime.now(IST)."""
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=IST)
 
 
 def _estimate_token_expiry(created_at: datetime) -> datetime:
@@ -144,7 +173,8 @@ class BrokerStatus:
     broker: str
     api_key_masked: str | None
     api_secret_masked: str | None
-    access_token_masked: str | None
+    # Describes the current authenticated SESSION (the generated access
+    # token), never the API key/secret themselves, which don't expire daily.
     token_status: str  # ACTIVE | EXPIRING_SOON | EXPIRED | INVALID | UNAVAILABLE
     connection_status: str  # CONNECTED | TOKEN_EXPIRED | TOKEN_INVALID | DISCONNECTED | MISSING | ERROR
     token_created_at: datetime | None
@@ -154,6 +184,8 @@ class BrokerStatus:
     last_successful_request_at: datetime | None
     last_error: str | None
     credentials_persisted: bool
+    auth_mode: str = AUTH_MODE_NONE
+    auto_reauth_available: bool = False
     # Endpoint-level availability, e.g. {"market_data": {"status":
     # "UNAVAILABLE", "error": "...", "checkedAt": ...}}. Only capabilities
     # actually exercised since the last (re)connection appear here; none of
@@ -238,6 +270,9 @@ class TokenService:
         self._last_error: str | None = None
         self._client: GrowwAPI | None = None
         self._capabilities: dict[str, dict[str, Any]] = {}
+        self._last_reauth_attempt_at: datetime | None = None
+        self._reauth_failing = False
+        self._last_reauth_error: str | None = None
         # _TrackedClient callbacks can arrive concurrently (e.g.
         # account_snapshot's thread pool) - transitions happen under this.
         self._state_lock = threading.RLock()
@@ -266,10 +301,10 @@ class TokenService:
                 self._access_token = credential_manager.decrypt(row["encryptedAccessToken"], key)
         except CredentialEncryptionUnavailable as error:
             logger.warning("Stored broker credentials could not be decrypted, ignoring: %s", error)
-        self._token_created_at = row["tokenCreatedAt"]
-        self._token_expiry_at = row["tokenExpiryAt"]
-        self._last_validated_at = row["lastValidatedAt"]
-        self._last_successful_request_at = row["lastSuccessfulRequestAt"]
+        self._token_created_at = _as_ist(row["tokenCreatedAt"])
+        self._token_expiry_at = _as_ist(row["tokenExpiryAt"])
+        self._last_validated_at = _as_ist(row["lastValidatedAt"])
+        self._last_successful_request_at = _as_ist(row["lastSuccessfulRequestAt"])
         self._connection_status = row["connectionStatus"] or "MISSING"
         self._last_error = row["lastError"]
 
@@ -288,12 +323,90 @@ class TokenService:
     def is_connected(self) -> bool:
         return self.current_connection_status() == "CONNECTED"
 
+    def auth_mode(self) -> str:
+        if self._api_key and self._api_secret:
+            return AUTH_MODE_API_KEY_SECRET
+        if self._access_token:
+            return AUTH_MODE_MANUAL_TOKEN
+        return AUTH_MODE_NONE
+
     def effective_client(self) -> GrowwAPI:
+        """The one way callers get a Groww client. With an API key/secret
+        configured, a session that is known to be dead (expired/invalid
+        token) or past its estimated daily reset is renewed here first -
+        see _reauthenticate(). The call that failed is never retried on the
+        caller's behalf (an order is never silently re-sent); only calls
+        made after renewal use the new session."""
+        with self._state_lock:
+            if self.auth_mode() == AUTH_MODE_API_KEY_SECRET:
+                if self._client is None:
+                    self._reauthenticate("SESSION_EXPIRED")
+                elif self._session_past_estimated_expiry():
+                    self._reauthenticate("SCHEDULED_RENEWAL")
         if self._client is None:
             raise BrokerNotConnectedError(
                 self._last_error or "Groww is not connected. Configure it in API Management."
             )
         return _TrackedClient(self._client, self.mark_successful_request, self.mark_failed_request)  # type: ignore[return-value]
+
+    def _session_past_estimated_expiry(self) -> bool:
+        return self._token_expiry_at is not None and datetime.now(IST) >= self._token_expiry_at
+
+    def _mint_session(self, api_key: str, api_secret: str) -> str:
+        """Generates a new session from the API key/secret (Groww's
+        approval-checksum flow) and validates it. Raises on failure without
+        touching the current session."""
+        token = GrowwAPI.get_access_token(api_key=api_key, secret=api_secret)
+        self._activate(token)
+        return token
+
+    def _reauthenticate(self, reason: str, *, force: bool = False) -> bool:
+        """Mints a fresh session from the stored API key/secret. Returns
+        whether it succeeded. On failure the current session, if any, is
+        kept untouched (a proactive renewal must never drop a still-working
+        session), connection_status is left as it was, and the error is
+        recorded - once per failing streak, not on every retry. Automatic
+        attempts are rate-limited by _REAUTH_COOLDOWN_SECONDS."""
+        if not (self._api_key and self._api_secret):
+            return False
+        now = datetime.now(IST)
+        if (
+            not force and self._last_reauth_attempt_at is not None
+            and (now - self._last_reauth_attempt_at).total_seconds() < _REAUTH_COOLDOWN_SECONDS
+        ):
+            return False
+        self._last_reauth_attempt_at = now
+        try:
+            token = self._mint_session(self._api_key, self._api_secret)
+        except _GROWW_CALL_ERRORS as error:
+            message = f"Re-authentication failed: {self._safe_message(error)}"[:255]
+            self._last_reauth_error = message
+            if self._client is None:
+                self._last_error = message
+            if not self._reauth_failing or force:
+                self._record_event("REAUTH_FAILED", status="FAILED", error_message=f"{reason}: {message}"[:255])
+            self._reauth_failing = True
+            self._persist()
+            return False
+        self._reauth_failing = False
+        self._set_fresh_token_lifecycle()
+        self._record_event(
+            "SESSION_REAUTHENTICATED", status="SUCCESS",
+            token_reference=credential_manager.reference_hint(token), error_message=reason,
+        )
+        self._persist()
+        return True
+
+    def reauthenticate(self) -> BrokerStatus:
+        """The explicit "Re-authenticate now" action: mints a new session
+        from the stored key/secret immediately, ignoring the cooldown (e.g.
+        right after approving API access in the Groww app)."""
+        with self._state_lock:
+            if self.auth_mode() != AUTH_MODE_API_KEY_SECRET:
+                raise ValueError("Re-authentication needs a Groww API key and secret. Add them in API Management.")
+            if not self._reauthenticate("MANUAL", force=True):
+                raise BrokerValidationError(self._last_reauth_error or "Re-authentication failed.")
+        return self.status()
 
     def mark_successful_request(self, endpoint: str | None = None) -> None:
         """Called by _TrackedClient after any real Groww API call succeeds.
@@ -397,7 +510,6 @@ class TokenService:
             broker=BROKER_NAME,
             api_key_masked=credential_manager.mask_key(self._api_key),
             api_secret_masked=credential_manager.mask_secret(self._api_secret),
-            access_token_masked=credential_manager.mask_secret(self._access_token),
             token_status=self._compute_token_status(),
             connection_status=self.current_connection_status(),
             token_created_at=self._token_created_at,
@@ -408,6 +520,8 @@ class TokenService:
             last_error=self._last_error,
             credentials_persisted=credential_manager.is_configured(self._settings.credential_encryption_key)
             and db.is_available(),
+            auth_mode=self.auth_mode(),
+            auto_reauth_available=self.auth_mode() == AUTH_MODE_API_KEY_SECRET,
             capabilities={name: dict(value) for name, value in self._capabilities.items()},
         )
 
@@ -516,10 +630,12 @@ class TokenService:
     # -- update workflows --------------------------------------------
 
     def update_access_token(self, raw_token: str) -> BrokerStatus:
-        """The manual "Update Access Token" workflow: validates the token
-        against a real, safe/read-only Groww endpoint BEFORE storing
-        anything, per the required workflow order. Never invents a token -
-        this only ever stores exactly what the caller supplied."""
+        """The advanced "use a session token instead" workflow, for keys
+        that can't mint sessions from a secret (e.g. TOTP keys): validates
+        the pasted session token against a real, safe/read-only Groww
+        endpoint BEFORE storing anything. Never invents a token - this only
+        ever stores exactly what the caller supplied. Such a session is not
+        renewed automatically unless an API key/secret is also configured."""
         raw_token = (raw_token or "").strip()
         if not raw_token:
             raise ValueError("Access token cannot be empty.")
@@ -550,8 +666,7 @@ class TokenService:
         if not api_key or not api_secret:
             raise ValueError("API key and API secret are both required.")
         try:
-            token = GrowwAPI.get_access_token(api_key=api_key, secret=api_secret)
-            self._activate(token)
+            self._mint_session(api_key, api_secret)
         except _GROWW_CALL_ERRORS as error:
             message = self._handle_failed_activation(error)
             self._record_event(
@@ -562,6 +677,7 @@ class TokenService:
             raise BrokerValidationError(message) from error
         self._api_key = api_key
         self._api_secret = api_secret
+        self._reauth_failing = False
         self._set_fresh_token_lifecycle()
         self.last_update_persisted = self._persist()
         self._record_event(
@@ -608,9 +724,10 @@ class TokenService:
     def auto_refresh_if_needed(self) -> None:
         """Runs at startup (and may be called again later) to establish a
         working connection from whatever credentials are already known,
-        with no user interaction. Tries a stored/env access token first,
-        then falls back to minting a fresh one from an api key+secret pair
-        via Groww's approval-checksum flow. Never raises - a failed
+        with no user interaction. Reuses a stored session (access token)
+        first if it still validates - avoiding an unnecessary re-mint - and
+        otherwise mints a fresh session from the API key/secret via Groww's
+        approval-checksum flow. Never raises - a failed
         auto-refresh just leaves connection_status reflecting why, for the
         API Management page to show."""
         if self._client is not None:
@@ -633,8 +750,7 @@ class TokenService:
                 )
         if self._api_key and self._api_secret:
             try:
-                token = GrowwAPI.get_access_token(api_key=self._api_key, secret=self._api_secret)
-                self._activate(token)
+                token = self._mint_session(self._api_key, self._api_secret)
                 self._set_fresh_token_lifecycle()
                 self._record_event(
                     "AUTO_REFRESH_SUCCESS", status="SUCCESS", token_reference=credential_manager.reference_hint(token),

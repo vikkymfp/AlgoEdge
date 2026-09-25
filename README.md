@@ -37,14 +37,17 @@ The Groww account used by the server must have access to the relevant live-data 
 
 ## Connect Groww
 
-Groww API access requires a Groww Trading API subscription. Create an access token or API key and secret in the [Groww Trading API portal](https://groww.in/trade-api/api-keys), then add credentials to `.env`:
+Groww API access requires a Groww Trading API subscription. Create an API key and secret in the [Groww Trading API portal](https://groww.in/trade-api/api-keys), then add them to `.env` (or save them from the dashboard's API Management page):
 
 ```text
 ALGOEDGE_BROKER=groww
-ALGOEDGE_GROWW_ACCESS_TOKEN=your_token
+ALGOEDGE_GROWW_API_KEY=your_api_key
+ALGOEDGE_GROWW_API_SECRET=your_api_secret
 ```
 
-Alternatively, use `ALGOEDGE_GROWW_API_KEY` and `ALGOEDGE_GROWW_API_SECRET`. Do not commit `.env` or share these values. The access-token flow expires daily; API-key and secret authentication requires the daily approval required by Groww.
+The API key and secret are the persistent credentials. The access token is a session generated from them (`GrowwAPI.get_access_token(api_key, secret=...)`); you don't need to maintain it. Groww sessions reset daily (around 6:00 AM IST), and AlgoEdge generates a new one automatically when the session expires or passes that reset. If generating a session fails - for example because Groww's daily approval for the key hasn't been given yet - the dashboard shows it, retries at most once a minute, and offers **Re-authenticate now**. Orders that fail on an expired session are never re-sent automatically.
+
+`ALGOEDGE_GROWW_ACCESS_TOKEN` is optional and only for keys that can't generate sessions from a secret (such as TOTP keys): a session token pasted there or via API Management is used as-is and is not renewed. Do not commit `.env` or share these values.
 
 The `.env` values are the initial/fallback configuration. Credentials saved from the dashboard's API Management page are stored encrypted in the database (when `ALGOEDGE_DB_SERVER` and `ALGOEDGE_CREDENTIAL_ENCRYPTION_KEY` are set) and take priority over `.env`. The dashboard, `python -m algoedge.connect_groww`, and `python -m fno_signals.main --live` all resolve credentials the same way; saving from API Management never edits `.env`.
 
