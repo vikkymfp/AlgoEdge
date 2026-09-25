@@ -16,7 +16,17 @@ PNL_UNIT_UNDERLYING_POINTS = "UNDERLYING_POINTS"
 
 @dataclass(frozen=True)
 class RiskLimits:
-    """Configurable risk limits, per the blueprint's Risk Manager spec."""
+    """Configurable risk limits, per the blueprint's Risk Manager spec.
+
+    These are EXECUTION / RISK CONTROLS that paper Auto Trade applies on top
+    of the canonical strategy's signals - they are deliberately NOT strategy
+    rules, so the Backtest (which measures the strategy's signal quality,
+    fno_signals.strategy.run()) does not model them: the entry cutoff,
+    forced square-off, cooldown, daily trade cap, daily loss limit,
+    portfolio-wide max open positions and the consecutive-loss halt. A
+    paper result can therefore legitimately differ from the Backtest for
+    the same window; see research/phase6/FINDINGS.md section 5.
+    """
 
     # Expressed in daily_loss_limit_unit, the same unit record_trade()'s
     # realized_pnl is accumulated in - never assumed to be rupees.
@@ -42,6 +52,10 @@ class RiskLimits:
     # "3 consecutive losses -> HALTED" from the spec. Deliberately requires
     # an explicit reset (see RiskManager.reset_consecutive_loss_halt) - the
     # spec is explicit that this must never auto-reopen on its own.
+    # A paper Auto Trade RISK CONTROL, not a strategy indicator or filter:
+    # it never changes which signals the strategy generates, only whether
+    # paper may act on them, so its effect is reported separately from
+    # strategy (Backtest) performance - see research/phase6/FINDINGS.md.
     max_consecutive_losses: int = 3
 
     # Minimum gap between an exit and the next new entry - "no blind

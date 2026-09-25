@@ -55,6 +55,13 @@ class SimulatedAccount:
     # Also what blocks a stale ENTRY event from reopening a position after
     # today's square-off has already happened.
     square_off_date: str | None = None
+    # The canonical stop-loss / target of the open position, recorded by
+    # algoedge.auto_trader.run_cycle() when the entry fills and cleared when
+    # the position fully closes. In-memory only (not persisted): after a
+    # restart run_cycle() re-derives them from the entry bar with the same
+    # canonical rule (fno_signals.strategy.risk_distances).
+    stop_loss: float | None = None
+    target: float | None = None
     # The instrument-master-validated contract this open position was
     # actually resolved against (Phase 5) - set only by fill_event()'s
     # entry branch when a `contract` is supplied, cleared when the
@@ -136,6 +143,8 @@ class SimulatedAccount:
                 self.side = None
                 self.index_id = None
                 self.contract = None
+                self.stop_loss = None
+                self.target = None
             return realized_pnl
         raise ValueError(f"Unsupported event kind: {kind}")
 
@@ -145,6 +154,7 @@ class OrderResult:
     status: str  # "PLACED" | "FAILED"
     detail: str
     realized_pnl: float = 0.0
+    fill_price: float | None = None  # the simulated fill price, for a PLACED order
 
 
 class OrderManager:
@@ -175,7 +185,7 @@ class OrderManager:
             action, quantity, price, realized_pnl,
         )
         return OrderResult(
-            "PLACED", f"Paper order filled: {action} {quantity} @ {price:.2f}", realized_pnl
+            "PLACED", f"Paper order filled: {action} {quantity} @ {price:.2f}", realized_pnl, price
         )
 
     def place_event(
@@ -197,5 +207,5 @@ class OrderManager:
             kind, quantity, price, realized_pnl,
         )
         return OrderResult(
-            "PLACED", f"Paper order filled: {kind} {quantity} @ {price:.2f}", realized_pnl
+            "PLACED", f"Paper order filled: {kind} {quantity} @ {price:.2f}", realized_pnl, price
         )

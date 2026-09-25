@@ -290,9 +290,11 @@ def test_square_off_takes_precedence_over_a_pending_strategy_event(monkeypatch) 
 
 
 def test_stale_entry_after_square_off_cannot_reopen_the_position(monkeypatch) -> None:
-    # step=6 starting 13:50 produces a real ENTRY_CALL at 15:00 (verified
-    # against the actual canonical strategy, not assumed).
-    uptrend = trending_df(60, start_price=100.0, step=6.0, start="2026-09-23 13:50")
+    # step=6 produces a real ENTRY_CALL at bar index 14 (verified against
+    # the actual canonical strategy, not assumed); starting 14:10 puts it at
+    # 15:20 (closed 15:25), so it is still a FRESH signal at 15:28 and it is
+    # the square-off guard - not the freshness rule - that refuses it.
+    uptrend = trending_df(60, start_price=100.0, step=6.0, start="2026-09-23 14:10")
     # Square-off already happened today; a later cycle's freshly-recomputed
     # window still contains an (unprocessed-by-timestamp) ENTRY_CALL.
     account = SimulatedAccount(square_off_date=TODAY, last_event_at=uptrend.index[0])

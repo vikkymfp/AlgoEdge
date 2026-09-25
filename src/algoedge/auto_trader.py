@@ -3,8 +3,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
+
+import numpy as np
+import pandas as pd
 
 from algoedge.market_pulse import TIMEFRAMES
 from algoedge.option_contract import OptionContract
@@ -12,7 +15,13 @@ from algoedge.order_manager import OrderManager, OrderResult, SimulatedAccount
 from algoedge.risk_manager import IST, RiskDecision, RiskManager
 from fno_signals.config import INDEX_MAP, StrategyConfig, strategy_config_for
 from fno_signals.main import fetch_underlying_data
-from fno_signals.strategy import TradeEvent
+from fno_signals.strategy import (
+    OpenPosition,
+    TradeEvent,
+    compute_indicators,
+    drop_invalid_bars,
+    risk_distances,
+)
 from fno_signals.strategy import run as run_strategy
 
 logger = logging.getLogger("algoedge.auto_trader")
@@ -28,6 +37,22 @@ _INDEX_CHOICE = {"nifty-50": 1, "bank-nifty": 2, "sensex": 3}
 # (opening a paper CALL/PUT position) vs an exit (closing one).
 _ENTRY_KINDS = {"ENTRY_CALL", "ENTRY_PUT"}
 _EXIT_KINDS = {"EXIT_SL", "EXIT_TARGET"}
+
+# yfinance interval string -> bar length. A strategy event is stamped with
+# its bar's START time (yfinance's convention); it becomes actionable when
+# that bar CLOSES, i.e. at timestamp + bar length.
+_BAR_LENGTH = {
+    "1m": timedelta(minutes=1), "5m": timedelta(minutes=5), "15m": timedelta(minutes=15),
+    "1h": timedelta(hours=1), "1d": timedelta(days=1),
+}
+
+# Freshness rule for paper fills: an event may only be acted on within this
+# many bar lengths after its bar closed. For the dashboard's 5m timeframe
+# polled every 300s (web_server.SCHEDULER_TICK_SECONDS) that is 10 minutes -
+# the tick that first sees the closed bar, plus one missed/late tick or
+# delayed data. Anything older is stale: its signal price no longer
+# reflects the market, so it is never filled at that price.
+SIGNAL_FRESHNESS_BARS = 2
 
 
 @dataclass(frozen=True)
@@ -93,6 +118,24 @@ def run_cycle(
     dependency to do so) - the actual instrument-master lookup lives in
     whatever the caller passes in (see web_server.py), keeping Auto Trade
     exactly as broker-import-free as it was before this phase.
+
+    Signal freshness: an event older than `SIGNAL_FRESHNESS_BARS` bar
+    lengths after its bar closed is stale. A stale ENTRY (or a stale EXIT
+    with no paper position to close) is expired - marked processed and
+    never filled. A stale EXIT while a paper position is still open is a
+    late exit: the position is still closed (never left orphaned), but at
+    the current price, never the obsolete SL/target level. All stale events
+    ahead of the first actionable one are expired in the same cycle, so a
+    backlog (e.g. after a restart) never trickles through one per tick.
+
+    Exit pricing: a fresh EXIT_SL/EXIT_TARGET fills at the event's
+    `exit_level` - the SL/target price itself - exactly like the canonical
+    backtest (algoedge.backtest.pair_trades), not at the exit bar's close.
+    A forced square-off still fills at the latest close.
+
+    Invalid OHLC bars (see fno_signals.strategy.drop_invalid_bars) are
+    dropped before anything reads a price, so a NaN bar can never become
+    a fill price.
     """
     if index_id not in _INDEX_CHOICE:
         raise ValueError(f"Unsupported index_id for Auto Trade: {index_id}")
@@ -104,8 +147,10 @@ def run_cycle(
     strategy_config = config or strategy_config_for(index_config)
 
     period, interval = TIMEFRAMES[timeframe]
-    data = fetch_underlying_data(index_config.ticker, period=period, interval=interval)
-    _results, events = run_strategy(data, strategy_config, underlying_label=index_config.name)
+    data = drop_invalid_bars(fetch_underlying_data(index_config.ticker, period=period, interval=interval))
+    if data.empty:
+        return AutoTradeCycleResult(None, RiskDecision(False, "No valid market data"), None)
+    current_price = float(data["Close"].iloc[-1])
 
     account = order_manager.account
     own_open_position = 1 if account.quantity > 0 else 0
@@ -122,7 +167,6 @@ def run_cycle(
     )
 
     if square_off_due:
-        current_price = float(data["Close"].iloc[-1])
         square_off_event = TradeEvent(
             timestamp=data.index[-1], kind="SQUARE_OFF", underlying_price=current_price,
             option_symbol=None, stop_loss=None, target=None, exit_level=current_price,
@@ -149,27 +193,72 @@ def run_cycle(
         # square_off_date - it has to remain eligible to retry.
         return AutoTradeCycleResult(square_off_event, RiskDecision(False, order_result.detail), order_result)
 
-    if not events:
+    # Position sync: the canonical strategy is evaluated against THIS paper
+    # account's real position, not the position it would reconstruct by
+    # replaying the whole window. Replaying diverged whenever paper didn't
+    # do what the replay assumed - a risk-blocked or expired entry, a forced
+    # square-off, a restart - leaving the strategy "in" a phantom trade that
+    # suppressed genuine new entries until the phantom exited. So once the
+    # account has processed anything, the strategy restarts just after
+    # account.last_event_at, seeded with the account's actual position;
+    # indicators and setup edges still use the whole window (canonical
+    # signals). account.last_event_at is the high-water mark of the last
+    # event filled, expired or squared off; anything not newer than it has
+    # already been processed. The OLDEST unprocessed event is handled first,
+    # so two events landing between polls are taken in order, one per cycle.
+    #
+    # Signal freshness: an event older than SIGNAL_FRESHNESS_BARS bar
+    # lengths after its bar closed is stale. A stale entry (or a stale exit
+    # with nothing to close) is expired - marked processed, never filled -
+    # and the strategy is re-evaluated from that point, so a genuine later
+    # signal the expired one was masking is still found in the same cycle.
+    bar_length = _BAR_LENGTH[interval]
+    max_age = bar_length * SIGNAL_FRESHNESS_BARS
+    event: TradeEvent | None = None
+    last_expired: TradeEvent | None = None
+    late_exit = False
+    expired = 0
+    for _ in range(len(data) + 1):  # each pass either returns an event or expires one
+        events = _account_synced_events(data, strategy_config, index_config.name, account)
+        unprocessed = (
+            events if account.last_event_at is None
+            else [e for e in events if e.timestamp > account.last_event_at]
+        )
+        if not unprocessed:
+            break
+        candidate = unprocessed[0]
+        if now - (_as_ist(candidate.timestamp) + bar_length) <= max_age:
+            event = candidate
+            break
+        if candidate.kind in _EXIT_KINDS and account.quantity > 0:
+            event, late_exit = candidate, True
+            break
+        account.last_event_at = candidate.timestamp
+        last_expired = candidate
+        expired += 1
+    if event is None:
+        if expired:
+            return AutoTradeCycleResult(
+                last_expired,
+                RiskDecision(False, f"Stale signal expired ({expired} event(s) older than {max_age} after bar close)"),
+                None,
+            )
+        if account.last_event_at is not None:
+            return AutoTradeCycleResult(
+                None, RiskDecision(False, "Signal already processed (duplicate) - nothing new since the last event"),
+                None,
+            )
         return AutoTradeCycleResult(None, RiskDecision(False, "No actionable signal"), None)
 
-    # fno_signals.strategy.run() recomputes the ENTIRE window from scratch
-    # every call - it has no memory of what a previous cycle already acted
-    # on. account.last_event_at is the high-water mark of the last event
-    # actually PLACED (see order_manager.py); anything not newer than it
-    # has already been processed. Picking the OLDEST unprocessed event
-    # (not simply the newest one in the window) is what makes this
-    # chronological and loss-free: if two real events land between polls
-    # (e.g. an exit immediately followed by a reversal entry), this cycle
-    # processes only the first of them and a later cycle picks up the
-    # second - never silently skipping the intermediate one the way always
-    # jumping straight to events[-1] would.
-    unprocessed = (
-        events if account.last_event_at is None
-        else [e for e in events if e.timestamp > account.last_event_at]
-    )
-    if not unprocessed:
-        return AutoTradeCycleResult(events[-1], RiskDecision(False, "Signal already processed (duplicate)"), None)
-    event = unprocessed[0]
+    if event.kind in _EXIT_KINDS and account.quantity == 0:
+        # The strategy replays its own position from the data; this exit
+        # belongs to an entry this paper account never filled (blocked or
+        # expired). Nothing to close - mark it processed so it can't block
+        # every later event for this index.
+        account.last_event_at = event.timestamp
+        return AutoTradeCycleResult(
+            event, RiskDecision(False, "No open paper position for this exit (its entry was never filled)"), None,
+        )
 
     if event.kind in _ENTRY_KINDS and already_squared_off_today:
         # Today's forced square-off already happened - a stale ENTRY event
@@ -206,11 +295,21 @@ def run_cycle(
     if not decision.allowed:
         return AutoTradeCycleResult(event, decision, None)
 
+    if event.kind in _EXIT_KINDS:
+        fill_price = current_price if late_exit else float(event.exit_level)
+        if late_exit:
+            decision = RiskDecision(True, "Late exit - signal past its freshness window, filled at current price")
+    else:
+        fill_price = event.underlying_price
     order_result = order_manager.place_event(
-        event.kind, event.underlying_price, quantity, index_id=index_id, contract=contract
+        event.kind, fill_price, quantity, index_id=index_id, contract=contract
     )
     if order_result.status == "PLACED":
         is_exit = event.kind in _EXIT_KINDS
+        if not is_exit:
+            # The canonical levels this position will exit on (see
+            # _account_synced_events); cleared by fill_event() when flat.
+            account.stop_loss, account.target = event.stop_loss, event.target
         risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
         # Deliberately only advanced on a successful fill, not merely on
         # having "seen" the event - a signal blocked by a risk gate this
@@ -218,6 +317,53 @@ def run_cycle(
         # eligible to fire on a later cycle once the gate reopens.
         account.last_event_at = event.timestamp
     return AutoTradeCycleResult(event, decision, order_result)
+
+
+def _account_synced_events(
+    data: pd.DataFrame, config: StrategyConfig, label: str, account: SimulatedAccount,
+) -> list[TradeEvent]:
+    """Canonical strategy events, evaluated against the account's real
+    position from just after account.last_event_at (see run_cycle). An
+    account that has never processed anything gets the plain canonical
+    replay of the window."""
+    if account.last_event_at is None:
+        return run_strategy(data, config, underlying_label=label)[1]
+    held = None
+    if account.quantity > 0 and account.side in ("CALL", "PUT"):
+        stop_loss, target = account.stop_loss, account.target
+        if stop_loss is None or target is None:
+            stop_loss, target = _levels_at_entry_bar(data, config, account.last_event_at, account.side)
+        held = OpenPosition(
+            side=account.side, entry_price=float(account.average_price or np.nan),
+            stop_loss=stop_loss, target=target,
+        )
+    return run_strategy(
+        data, config, underlying_label=label, start_after=account.last_event_at, initial_position=held,
+    )[1]
+
+
+def _levels_at_entry_bar(
+    data: pd.DataFrame, config: StrategyConfig, entry_at: Any, side: str,
+) -> tuple[float, float]:
+    """Re-derives an open position's canonical SL/target after a restart
+    (they are not persisted): while a paper position is open, the account's
+    last_event_at IS its entry bar, and paper never holds past the day's
+    square-off, so that bar is inside the fetched window. Returns NaN levels
+    if it isn't - the strategy then never exits that position on its own and
+    the forced square-off closes it."""
+    indicators = compute_indicators(data, config)
+    if entry_at not in indicators.index:
+        logger.warning("Entry bar %s not in window - open position has no strategy SL/target", entry_at)
+        return float("nan"), float("nan")
+    close = float(indicators.loc[entry_at, "Close"])
+    sl_dist, tp_dist = risk_distances(float(indicators.loc[entry_at, "atr"]), config)
+    direction = 1 if side == "CALL" else -1
+    return close - direction * sl_dist, close + direction * tp_dist
+
+
+def _as_ist(timestamp: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(timestamp)
+    return ts.tz_localize(IST) if ts.tzinfo is None else ts
 
 
 def restore_account_state(account: SimulatedAccount, snapshot: dict[str, Any]) -> None:

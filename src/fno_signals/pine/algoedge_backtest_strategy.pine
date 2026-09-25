@@ -79,11 +79,14 @@ bearSetup = emaFast < emaSlow and rsiValue < rsiBear and stDir > 0 and vwapOkBea
 // Only a genuine setup TRANSITION triggers an entry (matches the Python
 // engine's `call_signal = bull_setup and not bull_setup[1]`) - "still
 // true" on a later bar must never re-fire the same entry.
-callSignal = bullSetup and not bullSetup[1] and inSession and strategy.position_size == 0
-putSignal  = bearSetup and not bearSetup[1] and inSession and strategy.position_size == 0
-
 slDist = math.max(atrValue * slMult, minSlPoints)
 tpDist = slDist * (tpMult / slMult)
+// Never enter while the SL/target distance is na (risk ATR still warming
+// up) - matches the Python engine's guard; na > 0 is false in Pine.
+riskValid = slDist > 0 and tpDist > 0
+
+callSignal = bullSetup and not bullSetup[1] and inSession and strategy.position_size == 0 and riskValid
+putSignal  = bearSetup and not bearSetup[1] and inSession and strategy.position_size == 0 and riskValid
 
 // ---------------- Entries / exits ----------------
 // "long" here means "buy a CALL"; "short" means "buy a PUT" - see the
