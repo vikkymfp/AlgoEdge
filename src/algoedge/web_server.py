@@ -1042,6 +1042,14 @@ def _broker_status_payload() -> dict:
     }
 
 
+def _broker_update_payload() -> dict:
+    """The current status plus the result of the update operation itself,
+    kept separate: "update.persisted" says whether the new credentials were
+    stored, while connectionStatus is the only thing that says whether the
+    broker is connected right now."""
+    return {**_broker_status_payload(), "update": {"persisted": bool(token_service.last_update_persisted)}}
+
+
 @app.get("/api/broker/status")
 def broker_status() -> dict:
     return _broker_status_payload()
@@ -1068,7 +1076,7 @@ def broker_update_credentials(request: CredentialsUpdateRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except BrokerValidationError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
-    return _broker_status_payload()
+    return _broker_update_payload()
 
 
 @app.post("/api/broker/access-token")
@@ -1083,7 +1091,7 @@ def broker_update_access_token(request: AccessTokenUpdateRequest) -> dict:
         raise HTTPException(status_code=400, detail=str(error)) from error
     except BrokerValidationError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
-    return _broker_status_payload()
+    return _broker_update_payload()
 
 
 @app.post("/api/broker/test-connection")
@@ -1294,7 +1302,7 @@ def system_health() -> dict:
             "lastSuccessfulCheckAt": db_check["lastSuccessfulCheckAt"],
         },
         "broker": {
-            "status": "CONNECTED" if token_service.is_connected() else broker.connection_status,
+            "status": broker.connection_status,
         },
         "reconciliation": {"status": reconciliation_status},
         "riskEngine": {"status": risk_status},

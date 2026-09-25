@@ -1769,7 +1769,8 @@ function renderBrokerStatus(status) {
     ? `${formatTimestamp(status.tokenExpiryAt)}${status.tokenExpiryIsEstimated ? ' (estimated — Groww resets tokens daily ~6:00 AM IST)' : ''}`
     : 'Not published by Groww for this auth method';
 
-  const remaining = formatTimeRemaining(status.tokenExpiryAt);
+  // No usable token right now - a countdown would imply one exists.
+  const remaining = status.tokenStatus === 'UNAVAILABLE' ? null : formatTimeRemaining(status.tokenExpiryAt);
   const remainingEl = document.querySelector('#brokerTokenTimeRemaining');
   remainingEl.textContent = remaining || '—';
   remainingEl.className = remaining && remaining.startsWith('Expired') ? 'warning' : '';
@@ -1803,6 +1804,7 @@ function renderBrokerStatus(status) {
   }
 
   systemStatusState.broker.connected = status.connectionStatus === 'CONNECTED';
+  renderBrokerActionResult();
   updatePulseStatus();
   updateAutoGates();
   updateCriticalBanner();
@@ -1847,10 +1849,63 @@ async function loadBrokerHistory() {
   }
 }
 
-function showBrokerResult(message, isError) {
+// The result of the last API Management action (update token/credentials,
+// test connection) - kept separate from the current connection state and
+// re-rendered against it on every status refresh, so a success message can
+// never keep claiming "Connected" once the broker reports otherwise.
+// Shape: { kind: 'update' | 'test' | 'error', label, message, persisted, lostSinceAction }
+let brokerActionResult = null;
+
+function setBrokerActionResult(result) {
+  brokerActionResult = result ? { ...result, lostSinceAction: false } : null;
+  renderBrokerActionResult();
+}
+
+function brokerActionResultView(result, connectionStatus) {
+  if (!result) return { text: '', tone: '' };
+  if (result.kind === 'error') return { text: result.message, tone: 'warning' };
+
+  const connected = connectionStatus === 'CONNECTED';
+  // Any non-CONNECTED status seen after the action (CONNECTION_LOST,
+  // TOKEN_EXPIRED, TOKEN_INVALID, an API error) permanently retires the
+  // green "Connected" confirmation for that action - the action's own
+  // validation is no longer the current truth.
+  if (!connected) result.lostSinceAction = true;
+
+  if (result.kind === 'test') {
+    if (connected && !result.lostSinceAction) return { text: `Connected — ${result.message}`, tone: 'positive' };
+    return connected
+      ? { text: '', tone: '' }
+      : { text: 'Broker connection is currently unavailable — see Current API status below.', tone: 'warning' };
+  }
+
+  // kind === 'update'
+  if (connected && !result.lostSinceAction) {
+    return {
+      text: result.persisted
+        ? `${result.label} validated and saved. Connected.`
+        : `${result.label} validated for this session only (not saved). Connected.`,
+      tone: 'positive',
+    };
+  }
+  if (!connected) {
+    return {
+      text: result.persisted
+        ? 'Credentials saved, but broker connection is currently unavailable.'
+        : 'Credentials applied for this session only, but broker connection is currently unavailable.',
+      tone: 'warning',
+    };
+  }
+  // Reconnected later, but not by this action's validation.
+  return { text: result.persisted ? 'Credentials saved.' : 'Credentials applied for this session only.', tone: '' };
+}
+
+function renderBrokerActionResult() {
   const el = document.querySelector('#brokerActionResult');
-  el.textContent = message;
-  el.className = `broker-result ${isError ? 'warning' : 'positive'}`;
+  if (!el) return;
+  const view = brokerActionResultView(brokerActionResult, lastBrokerStatusPayload?.connectionStatus);
+  el.textContent = view.text;
+  el.className = `broker-result ${view.tone}`.trim();
 }
 
 function initBrokerPanel() {
@@ -1882,12 +1937,13 @@ function initBrokerPanel() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || 'Token update failed');
-      showBrokerResult('Access token validated and saved. Connected.', false);
       input.value = '';
       tokenForm.hidden = true;
+      renderBrokerStatus(payload);
+      setBrokerActionResult({ kind: 'update', label: 'Access token', persisted: Boolean(payload.update?.persisted) });
       await Promise.all([loadBrokerStatus(), loadBrokerHistory()]);
     } catch (error) {
-      showBrokerResult(error.message || 'Token update failed.', true);
+      setBrokerActionResult({ kind: 'error', message: error.message || 'Token update failed.' });
     } finally {
       submitButton.disabled = false;
     }
@@ -1907,13 +1963,14 @@ function initBrokerPanel() {
       });
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(payload.detail || 'Credential update failed');
-      showBrokerResult('API key/secret validated and saved. Connected.', false);
       keyInput.value = '';
       secretInput.value = '';
       credentialsForm.hidden = true;
+      renderBrokerStatus(payload);
+      setBrokerActionResult({ kind: 'update', label: 'API key/secret', persisted: Boolean(payload.update?.persisted) });
       await Promise.all([loadBrokerStatus(), loadBrokerHistory()]);
     } catch (error) {
-      showBrokerResult(error.message || 'Credential update failed.', true);
+      setBrokerActionResult({ kind: 'error', message: error.message || 'Credential update failed.' });
     } finally {
       submitButton.disabled = false;
     }
@@ -1925,10 +1982,12 @@ function initBrokerPanel() {
     try {
       const response = await fetch('/api/broker/test-connection', { method: 'POST' });
       const payload = await response.json();
-      showBrokerResult(payload.connected ? `Connected — ${payload.message}` : `Connection failed — ${payload.message}`, !payload.connected);
+      setBrokerActionResult(payload.connected
+        ? { kind: 'test', message: payload.message }
+        : { kind: 'error', message: `Connection failed — ${payload.message}` });
       await Promise.all([loadBrokerStatus(), loadBrokerHistory()]);
     } catch {
-      showBrokerResult('Test connection failed. Try again.', true);
+      setBrokerActionResult({ kind: 'error', message: 'Test connection failed. Try again.' });
     } finally {
       button.disabled = false;
     }

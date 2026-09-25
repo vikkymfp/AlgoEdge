@@ -149,6 +149,12 @@ class TokenService:
         self._connection_status = "MISSING"
         self._last_error: str | None = None
         self._client: GrowwAPI | None = None
+        # Whether the most recent successful update_access_token()/
+        # update_credentials() call actually stored the new secrets
+        # (encrypted) in the database. None until an update succeeds. Says
+        # nothing about whether the broker is connected right now - that is
+        # always current_connection_status().
+        self.last_update_persisted: bool | None = None
         self._load_from_db()
         self.auto_refresh_if_needed()
 
@@ -177,8 +183,18 @@ class TokenService:
 
     # -- public read API ----------------------------------------------
 
+    def current_connection_status(self) -> str:
+        """The one authoritative, current connection state - what the
+        header pill, API Management, Diagnostics and System Health all
+        show. CONNECTED only while a validated client is actually held;
+        a stored CONNECTED with no live client is reported as DISCONNECTED
+        rather than trusted."""
+        if self._connection_status == "CONNECTED" and self._client is None:
+            return "DISCONNECTED"
+        return self._connection_status
+
     def is_connected(self) -> bool:
-        return self._client is not None and self._connection_status == "CONNECTED"
+        return self.current_connection_status() == "CONNECTED"
 
     def effective_client(self) -> GrowwAPI:
         if self._client is None:
@@ -233,14 +249,15 @@ class TokenService:
         # update attempt) - "no credential on file" and "the credential you
         # just tried was rejected" are different, and the latter is the
         # more informative/accurate thing to show.
-        if self._connection_status == "TOKEN_INVALID":
+        connection_status = self.current_connection_status()
+        if connection_status == "TOKEN_INVALID":
             return "INVALID"
-        if self._connection_status == "TOKEN_EXPIRED":
+        if connection_status == "TOKEN_EXPIRED":
             return "EXPIRED"
         has_any_credential = bool(self._access_token or (self._api_key and self._api_secret))
         if not has_any_credential:
             return "UNAVAILABLE"
-        if self._connection_status != "CONNECTED":
+        if connection_status != "CONNECTED":
             return "UNAVAILABLE"
         if self._token_expiry_at is not None:
             remaining_seconds = (self._token_expiry_at - datetime.now(IST)).total_seconds()
@@ -257,7 +274,7 @@ class TokenService:
             api_secret_masked=credential_manager.mask_secret(self._api_secret),
             access_token_masked=credential_manager.mask_secret(self._access_token),
             token_status=self._compute_token_status(),
-            connection_status=self._connection_status,
+            connection_status=self.current_connection_status(),
             token_created_at=self._token_created_at,
             token_expiry_at=self._token_expiry_at,
             token_expiry_is_estimated=True,
@@ -295,7 +312,9 @@ class TokenService:
         message = getattr(error, "msg", None) or str(error)
         return message[:255]
 
-    def _persist(self) -> None:
+    def _persist(self) -> bool:
+        """Returns whether the credentials themselves (not just status
+        metadata) were written, encrypted, to the database."""
         key = self._settings.credential_encryption_key
         fields: dict[str, Any] = {
             "token_created_at": self._token_created_at,
@@ -313,7 +332,8 @@ class TokenService:
                 fields["encrypted_api_secret"] = credential_manager.encrypt(self._api_secret, key)
             if self._access_token:
                 fields["encrypted_access_token"] = credential_manager.encrypt(self._access_token, key)
-        db.save_broker_credential(BROKER_NAME, **fields)
+        saved = db.save_broker_credential(BROKER_NAME, **fields)
+        return saved and credential_manager.is_configured(key)
 
     def _record_event(
         self, event: str, *, status: str, token_reference: str | None = None, error_message: str | None = None,
@@ -379,7 +399,7 @@ class TokenService:
             self._persist()
             raise BrokerValidationError(message) from error
         self._set_fresh_token_lifecycle()
-        self._persist()
+        self.last_update_persisted = self._persist()
         self._record_event(
             "TOKEN_UPDATED", status="SUCCESS", token_reference=credential_manager.reference_hint(raw_token),
         )
@@ -408,7 +428,7 @@ class TokenService:
         self._api_key = api_key
         self._api_secret = api_secret
         self._set_fresh_token_lifecycle()
-        self._persist()
+        self.last_update_persisted = self._persist()
         self._record_event(
             "CREDENTIALS_UPDATED", status="SUCCESS", token_reference=credential_manager.reference_hint(api_key),
         )
