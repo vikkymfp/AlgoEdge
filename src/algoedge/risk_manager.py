@@ -162,10 +162,13 @@ class RiskManager:
         risk_reducing: bool = False,
     ) -> RiskDecision:
         """`risk_reducing=True` marks a SELL that closes an existing paper
-        position (a strategy SL/target exit): the kill switch and the
-        auto-trading-enabled switch stop NEW risk, so they must not trap an
-        open position without its exit. Ignored for BUY. Off by default, so
-        every other caller is unchanged."""
+        position (a strategy SL/target exit): the kill switch, the
+        consecutive-loss halt and the auto-trading-enabled switch stop NEW
+        risk, so they must not trap an open position without its exit (the
+        halt is shared across indices - one index's losing streak must not
+        freeze another index's stop). The switches and the halt themselves
+        stay as they are. Ignored for BUY. Off by default, so every other
+        caller is unchanged."""
         now = now or datetime.now(IST)
         self._reset_if_new_day(now)
 
@@ -175,7 +178,7 @@ class RiskManager:
         if self.state.kill_switch and not exit_only:
             reason = self.state.kill_switch_reason or "no reason recorded"
             return RiskDecision(False, f"Emergency kill switch is engaged ({reason})")
-        if self.state.consecutive_loss_halt:
+        if self.state.consecutive_loss_halt and not exit_only:
             return RiskDecision(
                 False,
                 f"Trading halted after {self.state.consecutive_losses} consecutive losses - reset required",
