@@ -54,6 +54,13 @@ _BAR_LENGTH = {
 # reflects the market, so it is never filled at that price.
 SIGNAL_FRESHNESS_BARS = 2
 
+# run_cycle() outcome reasons that callers classify (the audit trail and the
+# repeated-failure monitor in web_server); the text itself is unchanged.
+REASON_NO_MARKET_DATA = "No valid market data"
+REASON_STALE_EXPIRED_PREFIX = "Stale signal expired"
+REASON_EXIT_WITHOUT_POSITION = "No open paper position for this exit (its entry was never filled)"
+REASON_MISSED_SQUARE_OFF_WAITING_PREFIX = "Open position from"
+
 
 @dataclass(frozen=True)
 class AutoTradeCycleResult:
@@ -156,7 +163,7 @@ def run_cycle(
     period, interval = TIMEFRAMES[timeframe]
     data = drop_invalid_bars(fetch_underlying_data(index_config.ticker, period=period, interval=interval))
     if data.empty:
-        return AutoTradeCycleResult(None, RiskDecision(False, "No valid market data"), None)
+        return AutoTradeCycleResult(None, RiskDecision(False, REASON_NO_MARKET_DATA), None)
     current_price = float(data["Close"].iloc[-1])
 
     account = order_manager.account
@@ -180,7 +187,7 @@ def run_cycle(
         latest_bar_day = _as_ist(data.index[-1]).date()
         if not in_session or latest_bar_day != now.date():
             return AutoTradeCycleResult(None, RiskDecision(
-                False, f"Open position from {stale_since} missed its square-off - "
+                False, f"{REASON_MISSED_SQUARE_OFF_WAITING_PREFIX} {stale_since} missed its square-off - "
                        "waiting for today's in-session market data to close it",
             ), None)
         return _force_close(
@@ -248,7 +255,7 @@ def run_cycle(
         if expired:
             return AutoTradeCycleResult(
                 last_expired,
-                RiskDecision(False, f"Stale signal expired ({expired} event(s) older than {max_age} after bar close)"),
+                RiskDecision(False, f"{REASON_STALE_EXPIRED_PREFIX} ({expired} event(s) older than {max_age} after bar close)"),
                 None,
             )
         if account.last_event_at is not None:
@@ -265,7 +272,7 @@ def run_cycle(
         # every later event for this index.
         account.last_event_at = event.timestamp
         return AutoTradeCycleResult(
-            event, RiskDecision(False, "No open paper position for this exit (its entry was never filled)"), None,
+            event, RiskDecision(False, REASON_EXIT_WITHOUT_POSITION), None,
         )
 
     if event.kind in _ENTRY_KINDS and already_squared_off_today:

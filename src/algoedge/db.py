@@ -17,6 +17,7 @@ from algoedge.models import (
     Base,
     BrokerCredential,
     OrderRecord,
+    PaperDecisionEvent,
     ReconciliationEvent,
     RiskStateEvent,
     SignalRecord,
@@ -406,16 +407,18 @@ PERSIST_FAILED = "FAILED"
 
 def record_paper_cycle(
     *,
-    signal: dict[str, Any],
+    signal: dict[str, Any] | None,
     order: dict[str, Any] | None = None,
     risk_manager: Any = None,
     risk_event: str = "TRADE_RECORDED",
     account_snapshot: tuple[str, Any, str] | None = None,
+    decision: dict[str, Any] | None = None,
 ) -> str:
     """Persists everything one paper Auto Trade cycle produced - the signal,
     and for an order its OrderRecord, the post-fill risk snapshot and (for a
-    PLACED fill) the account snapshot `(index_id, account, event)` - in ONE
-    transaction: either every row is committed or none is.
+    PLACED fill) the account snapshot `(index_id, account, event)`, plus the
+    PaperDecisionEvent audit row for a decision that did not become a fill -
+    in ONE transaction: either every row is committed or none is.
 
     Unlike the per-record writers (record_signal/record_order/
     record_risk_snapshot/record_auto_trade_account_snapshot, still used as-is
@@ -428,13 +431,15 @@ def record_paper_cycle(
     if _session_factory is None:
         return PERSIST_DISABLED
     try:
-        rows: list[Any] = [StrategySignal(**signal)]
+        rows: list[Any] = [StrategySignal(**signal)] if signal is not None else []
         if order is not None:
             rows.append(OrderRecord(**order))
         if risk_manager is not None:
             rows.append(_risk_state_row(risk_manager, risk_event, scope="paper"))
         if account_snapshot is not None:
             rows.append(_account_snapshot_row(*account_snapshot))
+        if decision is not None:
+            rows.append(PaperDecisionEvent(**decision))
     except (AttributeError, TypeError, ValueError) as error:
         logger.error("DATABASE_FAILURE: paper cycle not persisted (invalid record): %s", error)
         return PERSIST_FAILED
@@ -485,6 +490,41 @@ def _account_snapshot_row(index_id: str, account: Any, event: str) -> AutoTradeA
         contract_expiry=contract.expiry if contract else None,
         contract_instrument_id=contract.instrument_id if contract else None,
     )
+
+
+def list_paper_decision_events(
+    *, index_id: str | None = None, limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Paper decision audit rows as plain dicts, newest first; [] (never
+    raises) if the DB isn't configured/reachable."""
+    if _session_factory is None:
+        return []
+    session: Session | None = None
+    try:
+        session = _session_factory()
+        query = session.query(PaperDecisionEvent)
+        if index_id is not None:
+            query = query.filter(PaperDecisionEvent.index_id == index_id)
+        query = query.order_by(PaperDecisionEvent.id.desc())
+        if limit is not None:
+            query = query.limit(limit)
+        return [
+            {
+                "id": row.id, "createdAt": row.created_at, "indexId": row.index_id,
+                "decision": row.decision, "reason": row.reason, "eventKind": row.event_kind,
+                "eventAt": row.event_at, "price": row.price,
+                "autoTradingEnabled": row.auto_trading_enabled, "killSwitch": row.kill_switch,
+                "consecutiveLossHalt": row.consecutive_loss_halt, "tradesToday": row.trades_today,
+                "realizedPnlToday": row.realized_pnl_today, "openQuantity": row.open_quantity,
+            }
+            for row in query.all()
+        ]
+    except SQLAlchemyError as error:
+        logger.warning("Could not load paper decision history: %s", error)
+        return []
+    finally:
+        if session is not None:
+            session.close()
 
 
 def load_latest_auto_trade_account_state(index_id: str) -> dict[str, Any] | None:

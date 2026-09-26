@@ -14,7 +14,15 @@ from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
 from algoedge import alerts, db, exit_reasons
-from algoedge.auto_trader import restore_account_state, run_cycle
+from algoedge.auto_trader import (
+    REASON_EXIT_WITHOUT_POSITION,
+    REASON_MISSED_SQUARE_OFF_WAITING_PREFIX,
+    REASON_NO_MARKET_DATA,
+    REASON_STALE_EXPIRED_PREFIX,
+    AutoTradeCycleResult,
+    restore_account_state,
+    run_cycle,
+)
 from algoedge.auto_trading_report import compute_equity_curve
 from algoedge.backtest import (
     compute_backtest_metrics,
@@ -26,6 +34,7 @@ from algoedge.backtest_export import build_excel_report, build_pdf_report
 from algoedge.config import get_settings
 from algoedge.cost_model import CostModel
 from algoedge.daily_summary import aggregate_period_summary, compute_daily_summary
+from algoedge.failure_monitor import CYCLE, DATABASE, RepeatedFailureMonitor
 from algoedge.groww_broker import GrowwBroker
 from algoedge.live_grid import LiveGridService
 from algoedge.manual_trades import compute_manual_trades
@@ -394,16 +403,78 @@ class CycleBusyError(RuntimeError):
     """Another paper cycle for the same index held its lock past the timeout."""
 
 
+# Repeated paper cycle/persistence failures -> one alert per failure streak
+# (see algoedge.failure_monitor for the kinds and the threshold).
+paper_failure_monitor = RepeatedFailureMonitor()
+
+
 def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
     lock = _cycle_locks[index_id]
     if not lock.acquire(timeout=_CYCLE_LOCK_TIMEOUT_SECONDS):
+        paper_failure_monitor.record_failure(index_id, CYCLE, CycleBusyError.__name__)
         raise CycleBusyError(
             f"Another paper cycle for {index_id} is still running after {_CYCLE_LOCK_TIMEOUT_SECONDS:.0f}s"
         )
     try:
-        return _execute_and_persist_cycle(index_id, interval, quantity)
+        response = _execute_and_persist_cycle(index_id, interval, quantity)
+    except Exception as error:
+        # Only the exception TYPE goes into the alert - a raw driver/broker
+        # message can carry connection details; the scheduler/endpoint still
+        # logs the full exception server-side, exactly as before.
+        paper_failure_monitor.record_failure(index_id, CYCLE, type(error).__name__)
+        raise
     finally:
         lock.release()  # also when the cycle raises
+    _record_cycle_health(index_id, response)
+    return response
+
+
+def _record_cycle_health(index_id: str, response: dict) -> None:
+    """Feeds a completed cycle's outcome to the repeated-failure monitor."""
+    if response["risk"]["reason"] == REASON_NO_MARKET_DATA:
+        paper_failure_monitor.record_failure(index_id, CYCLE, "no valid market data")
+    elif (response.get("persistence") or {}).get("status") == db.PERSIST_FAILED:
+        paper_failure_monitor.record_failure(index_id, DATABASE, "paper cycle persistence rolled back")
+        paper_failure_monitor.record_success(index_id, (CYCLE,))  # the cycle itself ran
+    else:
+        paper_failure_monitor.record_success(index_id)
+
+
+def _paper_decision(result: AutoTradeCycleResult) -> str | None:
+    """Classifies a cycle outcome that did NOT become a fill for the paper
+    decision audit, or None for fills and routine no-new-signal cycles."""
+    if result.order is not None:
+        return None if result.order.status == "PLACED" else "ORDER_FAILED"
+    if result.risk.allowed:
+        return None
+    reason = result.risk.reason
+    if result.event is None:
+        # Entries are held back until a missed prior-day square-off is resolved;
+        # "no actionable signal"/"already processed"/no data are not decisions.
+        return "SQUARE_OFF_PENDING" if reason.startswith(REASON_MISSED_SQUARE_OFF_WAITING_PREFIX) else None
+    if reason.startswith(REASON_STALE_EXPIRED_PREFIX):
+        return "EXPIRED"
+    if reason == REASON_EXIT_WITHOUT_POSITION:
+        return "SKIPPED"
+    return "BLOCKED"  # a risk/control rule, contract resolution or today's square-off
+
+
+def _paper_decision_row(index_id: str, result: AutoTradeCycleResult, account) -> dict | None:
+    decision = _paper_decision(result)
+    if decision is None:
+        return None
+    event = result.event
+    state = risk_manager.state
+    return {
+        "index_id": index_id, "decision": decision,
+        "reason": (result.order.detail if decision == "ORDER_FAILED" else result.risk.reason)[:255],
+        "event_kind": event.kind if event is not None else None,
+        "event_at": event.timestamp if event is not None else None,
+        "price": event.underlying_price if event is not None else None,
+        "auto_trading_enabled": state.auto_trading_enabled, "kill_switch": state.kill_switch,
+        "consecutive_loss_halt": state.consecutive_loss_halt, "trades_today": state.trades_today,
+        "realized_pnl_today": state.realized_pnl_today, "open_quantity": account.quantity,
+    }
 
 
 def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
@@ -443,7 +514,13 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
             source="algoedge.auto_trader",
         )
     event = result.event
+    decision_row = _paper_decision_row(index_id, result, order_manager.account)
     if event is None:
+        persistence = None
+        if decision_row is not None:
+            persistence = db.record_paper_cycle(signal=None, decision=decision_row)
+            if persistence == db.PERSIST_FAILED:
+                logger.error("%s: paper decision audit was not persisted (DATABASE_FAILURE)", index_id)
         return {
             "indexId": index_id,
             "interval": interval,
@@ -455,6 +532,10 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
                 "quantity": order_manager.account.quantity,
                 "averagePrice": order_manager.account.average_price,
                 "side": order_manager.account.side,
+            },
+            "persistence": None if persistence is None else {
+                "status": persistence,
+                "error": alerts.DATABASE_FAILURE if persistence == db.PERSIST_FAILED else None,
             },
         }
     is_exit = event.kind in ("EXIT_SL", "EXIT_TARGET", "SQUARE_OFF")
@@ -501,6 +582,7 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
             (index_id, order_manager.account, event.kind)
             if result.order is not None and result.order.status == "PLACED" else None
         ),
+        decision=decision_row,
     )
     if persistence == db.PERSIST_FAILED:
         logger.error("%s: paper cycle %s was not persisted (DATABASE_FAILURE, rolled back)", index_id, event.kind)

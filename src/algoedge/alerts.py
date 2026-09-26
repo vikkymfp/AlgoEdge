@@ -22,6 +22,11 @@ WEBHOOK_AUTH_FAILURE = "WEBHOOK_AUTH_FAILURE"
 DATABASE_FAILURE = "DATABASE_FAILURE"
 TRADING_HALTED = "TRADING_HALTED"
 SYSTEM_RESTART = "SYSTEM_RESTART"
+# Not in spec section 29's list: paper Auto Trade cycles failing repeatedly
+# (candle fetch/cycle exceptions, no valid market data) - see
+# algoedge.failure_monitor. Repeated paper persistence failures use the
+# existing DATABASE_FAILURE category.
+PAPER_CYCLE_FAILURE = "PAPER_CYCLE_FAILURE"
 
 SEVERITY = {
     ORDER_REJECTED: "WARNING",
@@ -36,6 +41,7 @@ SEVERITY = {
     DATABASE_FAILURE: "CRITICAL",
     TRADING_HALTED: "CRITICAL",
     SYSTEM_RESTART: "INFO",
+    PAPER_CYCLE_FAILURE: "CRITICAL",
 }
 
 

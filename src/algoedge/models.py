@@ -144,6 +144,34 @@ class AutoTradeAccountSnapshot(Base):
     contract_instrument_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
+class PaperDecisionEvent(Base):
+    """Append-only audit of paper Auto Trade decisions that did NOT become a
+    fill: a strategy event blocked by a risk/control rule, expired as stale,
+    an exit skipped for lack of a position, a failed paper fill, or entries
+    held back while a missed square-off waits for today's data. Fills are
+    already recorded as orders; routine "no new signal" cycles are not
+    audited. Holds only non-sensitive paper context - never credentials,
+    tokens or broker data."""
+
+    __tablename__ = "paper_decision_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    index_id: Mapped[str] = mapped_column(String(32))
+    decision: Mapped[str] = mapped_column(String(32))  # BLOCKED|EXPIRED|SKIPPED|ORDER_FAILED|SQUARE_OFF_PENDING
+    reason: Mapped[str] = mapped_column(String(255))  # the engine's own reason text, verbatim
+    event_kind: Mapped[str | None] = mapped_column(String(16), nullable=True)  # ENTRY_CALL|... or None
+    event_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # the event's bar
+    price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Risk/control context at decision time (RiskManager state + this index's position).
+    auto_trading_enabled: Mapped[bool] = mapped_column(Boolean)
+    kill_switch: Mapped[bool] = mapped_column(Boolean)
+    consecutive_loss_halt: Mapped[bool] = mapped_column(Boolean)
+    trades_today: Mapped[int] = mapped_column(Integer)
+    realized_pnl_today: Mapped[float] = mapped_column(Float)
+    open_quantity: Mapped[int] = mapped_column(Integer)
+
+
 class BrokerCredential(Base):
     """One row per broker (currently just "groww"), upserted in place -
     holds encrypted secrets and token metadata for the API Management page.
@@ -273,7 +301,7 @@ class AlertEvent(Base):
     # ORDER_REJECTED | ORDER_FAILED | BROKER_DISCONNECTED | POSITION_MISMATCH |
     # DAILY_LOSS_LIMIT_REACHED | KILL_SWITCH_ACTIVATED | UNEXPECTED_POSITION |
     # UNEXPECTED_ORDER | WEBHOOK_AUTH_FAILURE | DATABASE_FAILURE |
-    # TRADING_HALTED | SYSTEM_RESTART
+    # TRADING_HALTED | SYSTEM_RESTART | PAPER_CYCLE_FAILURE
     message: Mapped[str] = mapped_column(String(255))
     source: Mapped[str] = mapped_column(String(64))  # which process/module raised it
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False)
