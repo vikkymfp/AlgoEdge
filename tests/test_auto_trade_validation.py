@@ -27,7 +27,7 @@ from fno_signals.config import INDEX_MAP, strategy_config_for
 from fno_signals.strategy import TradeEvent
 from fno_signals.strategy import run as run_strategy
 
-TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
+TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 40, tzinfo=IST)  # the 10:35 entry bar has just closed (B8)
 CONFIG = strategy_config_for(INDEX_MAP[1])  # nifty-50 -> choice 1
 
 
@@ -166,9 +166,10 @@ def test_put_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> N
     risk_manager.enable_auto_trading()
     order_manager = OrderManager()
 
-    patch_fetch(monkeypatch, DOWNTREND_60.iloc[:14])  # entry bar is index 13
+    patch_fetch(monkeypatch, DOWNTREND_60.iloc[:14])  # entry bar is index 13 (10:20, closes 10:25)
+    put_entry_bar_closed = datetime(2026, 9, 23, 10, 25, tzinfo=IST)
     entry_result = _run_cycle(
-        "nifty-50", "5m", risk_manager, order_manager, quantity=2, now=TRADING_HOURS_NOW
+        "nifty-50", "5m", risk_manager, order_manager, quantity=2, now=put_entry_bar_closed
     )
     assert entry_result.event.kind == "ENTRY_PUT"
     entry_price = order_manager.account.average_price
@@ -176,7 +177,7 @@ def test_put_entry_then_exit_round_trip_across_two_real_cycles(monkeypatch) -> N
     patch_fetch(monkeypatch, DOWNTREND_60)
     exit_result = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=2,
-        now=TRADING_HOURS_NOW + timedelta(minutes=5),
+        now=put_entry_bar_closed + timedelta(minutes=5),
     )
 
     assert exit_result.event.kind == "EXIT_TARGET"
@@ -238,10 +239,10 @@ def test_position_reversal_call_to_put_across_separate_cycles(monkeypatch) -> No
     # leftover state from the CALL blocks it and it isn't mistaken for a
     # duplicate of an earlier, unrelated event.
     reversal_downtrend = trending_df(60, start_price=300.0, step=-2.0, start="2026-09-23 11:20")
-    patch_fetch(monkeypatch, reversal_downtrend.iloc[:14])
+    patch_fetch(monkeypatch, reversal_downtrend.iloc[:14])  # entry bar 12:25, closes 12:30
     r3 = _run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
-        now=TRADING_HOURS_NOW + timedelta(minutes=10),
+        now=datetime(2026, 9, 23, 12, 30, tzinfo=IST),
     )
     assert r3.event.kind == "ENTRY_PUT"
     assert r3.order.status == "PLACED"
@@ -394,6 +395,12 @@ def test_daily_loss_limit_blocks_entry_via_run_cycle(monkeypatch) -> None:
 
 
 def test_entry_blocked_before_trading_session_start(monkeypatch) -> None:
+    # Phase 7 B8: new entries come only from COMPLETED candles, and the
+    # canonical strategy's own entry session (09:15-15:40) means no completed
+    # pre-open bar can carry an entry signal - so before the session opens no
+    # entry can be taken at all. The 10:35 entry bar below has not even
+    # closed at 09:00. (RiskManager's trading-hours gate itself is covered in
+    # tests/test_risk_manager.py.)
     patch_fetch(monkeypatch, UPTREND_60.iloc[:17])
     risk_manager = RiskManager()
     risk_manager.enable_auto_trading()
@@ -403,7 +410,8 @@ def test_entry_blocked_before_trading_session_start(monkeypatch) -> None:
     result = _run_cycle("nifty-50", "5m", risk_manager, order_manager, quantity=1, now=before_open)
 
     assert result.order is None
-    assert "trading hours" in result.risk.reason.lower()
+    assert order_manager.account.quantity == 0
+    assert result.risk.reason == "No actionable signal"
 
 
 def test_entry_blocked_after_trading_session_end(monkeypatch) -> None:

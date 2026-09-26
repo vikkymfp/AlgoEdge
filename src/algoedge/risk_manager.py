@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -78,7 +79,13 @@ class RiskState:
     auto_trading_enabled: bool = False
     kill_switch: bool = False
     kill_switch_reason: str | None = None
+    # Every successful fill today (entries, exits, square-offs) - the unit
+    # the live fno_signals CLI's max_trades_per_day check counts in.
     trades_today: int = 0
+    # Successful NEW ENTRY fills today (record_entry()), counted only by paper
+    # Auto Trade: paper's max_trades_per_day means new entries, so exits,
+    # square-offs and recoveries never use up its allowance.
+    entries_today: int = 0
     realized_pnl_today: float = 0.0
     trade_day: str | None = None
     consecutive_losses: int = 0
@@ -108,6 +115,7 @@ class RiskManager:
         if self.state.trade_day != today:
             self.state.trade_day = today
             self.state.trades_today = 0
+            self.state.entries_today = 0
             self.state.realized_pnl_today = 0.0
             # Deliberately NOT reset here: consecutive_losses/
             # consecutive_loss_halt. The spec requires an explicit reset,
@@ -130,6 +138,14 @@ class RiskManager:
                 self.state.consecutive_losses = 0
             # A breakeven exit (realized_pnl == 0) leaves the streak
             # unchanged - a scratch trade is neither a win nor a loss.
+
+    def record_entry(self, now: datetime | None = None) -> None:
+        """Counts one successful NEW ENTRY fill toward today's paper entry
+        cap (see check(..., cap_new_entries=True)). Called by paper Auto
+        Trade in addition to record_trade(), never for an exit/square-off."""
+        now = now or datetime.now(IST)
+        self._reset_if_new_day(now)
+        self.state.entries_today += 1
 
     def enable_auto_trading(self) -> None:
         self.state.auto_trading_enabled = True
@@ -158,21 +174,37 @@ class RiskManager:
         *,
         order_value: float | None = None,
         capital_allocated: float | None = None,
+        risk_reducing: bool = False,
+        cap_new_entries: bool = False,
     ) -> RiskDecision:
+        """`risk_reducing=True` marks a SELL that closes an existing paper
+        position (a strategy SL/target exit): the kill switch, the
+        consecutive-loss halt and the auto-trading-enabled switch stop NEW
+        risk, so they must not trap an open position without its exit (the
+        halt is shared across indices - one index's losing streak must not
+        freeze another index's stop). The switches and the halt themselves
+        stay as they are. Ignored for BUY. Off by default, so every other
+        caller is unchanged.
+
+        `cap_new_entries=True` (paper Auto Trade) makes max_trades_per_day
+        count successful NEW ENTRY fills (state.entries_today) instead of
+        every fill (state.trades_today, the default - still what the live
+        fno_signals CLI counts)."""
         now = now or datetime.now(IST)
         self._reset_if_new_day(now)
 
         if action not in {"BUY", "SELL"}:
             return RiskDecision(False, f"Unsupported action: {action}")
-        if self.state.kill_switch:
+        exit_only = risk_reducing and action == "SELL"
+        if self.state.kill_switch and not exit_only:
             reason = self.state.kill_switch_reason or "no reason recorded"
             return RiskDecision(False, f"Emergency kill switch is engaged ({reason})")
-        if self.state.consecutive_loss_halt:
+        if self.state.consecutive_loss_halt and not exit_only:
             return RiskDecision(
                 False,
                 f"Trading halted after {self.state.consecutive_losses} consecutive losses - reset required",
             )
-        if not self.state.auto_trading_enabled:
+        if not self.state.auto_trading_enabled and not exit_only:
             return RiskDecision(False, "Auto trading is disabled")
         if not (self.limits.trading_start <= now.time() <= self.limits.trading_end):
             return RiskDecision(False, "Outside configured trading hours")
@@ -185,7 +217,8 @@ class RiskManager:
         # Both gate taking on NEW risk only - a SELL closes an existing
         # position's SL/target exit, which must never be trapped open by
         # the very loss/activity it is part of limiting.
-        if action == "BUY" and self.state.trades_today >= self.limits.max_trades_per_day:
+        counted = self.state.entries_today if cap_new_entries else self.state.trades_today
+        if action == "BUY" and counted >= self.limits.max_trades_per_day:
             return RiskDecision(False, "Max trades per day reached")
         if action == "BUY" and self.state.realized_pnl_today <= -abs(self.limits.daily_loss_limit):
             return RiskDecision(False, "Daily loss limit reached")
@@ -207,3 +240,50 @@ class RiskManager:
         if action == "SELL" and open_positions <= 0:
             return RiskDecision(False, "No open position to exit")
         return RiskDecision(True, "Risk checks passed")
+
+
+def restore_risk_state(risk_manager: RiskManager, snapshot: dict[str, Any]) -> None:
+    """Applies a persisted risk-state snapshot (see
+    `algoedge.db.load_latest_risk_state()`) onto `risk_manager.state` at
+    startup, so the daily-loss/trades-today counters, kill switch and
+    consecutive-loss halt survive a restart.
+
+    `last_exit_at` is stored in a timezone-naive DB DateTime column and
+    comes back naive; it is restored as Asia/Kolkata, the same convention
+    `algoedge.auto_trader.restore_account_state()` uses for the paper
+    account's `last_event_at`. Left naive, the cooldown comparison in
+    `check()` against the timezone-aware current time would raise
+    TypeError on every new-entry check after a restart.
+
+    `entries_today` is restored as saved; see _restored_entries_today() for
+    snapshots written before it existed.
+    """
+    state = risk_manager.state
+    last_exit_at = snapshot["last_exit_at"]
+    if last_exit_at is not None and last_exit_at.tzinfo is None:
+        last_exit_at = last_exit_at.replace(tzinfo=IST)
+    state.auto_trading_enabled = snapshot["auto_trading_enabled"]
+    state.kill_switch = snapshot["kill_switch"]
+    state.kill_switch_reason = snapshot["kill_switch_reason"]
+    state.trades_today = snapshot["trades_today"]
+    state.entries_today = _restored_entries_today(snapshot)
+    state.realized_pnl_today = snapshot["realized_pnl_today"]
+    state.trade_day = snapshot["trade_day"]
+    state.consecutive_losses = snapshot["consecutive_losses"]
+    state.consecutive_loss_halt = snapshot["consecutive_loss_halt"]
+    state.last_exit_at = last_exit_at
+
+
+def _restored_entries_today(snapshot: dict[str, Any]) -> int:
+    """Legacy compatibility fallback: a snapshot saved before entries_today
+    existed has none (NULL), so derive it from that day's fill count. Paper
+    holds at most one position at a time across all indices
+    (max_open_positions=1), so historical fills normally alternate entry,
+    exit, entry, ... and ceil(fills / 2) is exact - a B4 missed-square-off
+    recovery fill can make it one too high, a conservative overestimate
+    (fewer entries allowed). It only affects the rest of that IST day: the
+    counter resets to 0 on the next IST day."""
+    entries = snapshot.get("entries_today")
+    if entries is not None:
+        return int(entries)
+    return (int(snapshot["trades_today"]) + 1) // 2

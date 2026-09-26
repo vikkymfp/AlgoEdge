@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -13,7 +14,15 @@ from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
 from algoedge import alerts, db, exit_reasons
-from algoedge.auto_trader import restore_account_state, run_cycle
+from algoedge.auto_trader import (
+    REASON_EXIT_WITHOUT_POSITION,
+    REASON_MISSED_SQUARE_OFF_WAITING_PREFIX,
+    REASON_NO_MARKET_DATA,
+    REASON_STALE_EXPIRED_PREFIX,
+    AutoTradeCycleResult,
+    restore_account_state,
+    run_cycle,
+)
 from algoedge.auto_trading_report import compute_equity_curve
 from algoedge.backtest import (
     compute_backtest_metrics,
@@ -25,6 +34,7 @@ from algoedge.backtest_export import build_excel_report, build_pdf_report
 from algoedge.config import get_settings
 from algoedge.cost_model import CostModel
 from algoedge.daily_summary import aggregate_period_summary, compute_daily_summary
+from algoedge.failure_monitor import CYCLE, DATABASE, RepeatedFailureMonitor
 from algoedge.groww_broker import GrowwBroker
 from algoedge.live_grid import LiveGridService
 from algoedge.manual_trades import compute_manual_trades
@@ -51,7 +61,7 @@ from algoedge.option_contract import (
 from algoedge.order_manager import OrderManager
 from algoedge.pnl import compute_paper_unrealized_pnl, compute_realized_pnl
 from algoedge.reconciliation_gate import ReconciliationGate
-from algoedge.risk_manager import RiskManager
+from algoedge.risk_manager import RiskManager, restore_risk_state
 from algoedge.scheduler import AutoTradingScheduler
 from algoedge.strategy_engine import DEFAULT_STRATEGY_CONFIG, StrategyConfig, evaluate
 from algoedge.strategy_performance import compute_strategy_performance
@@ -91,17 +101,16 @@ reconciliation_gate = ReconciliationGate()
 order_managers: dict[str, OrderManager] = {index_id: OrderManager() for index_id in INDEX_DEFINITIONS}
 SCHEDULER_TICK_SECONDS = 300.0  # 5 minutes, matches the default 5m candle timeframe
 
-_prior_risk_state = db.load_latest_risk_state(scope="paper")
-if _prior_risk_state is not None:
-    risk_manager.state.auto_trading_enabled = _prior_risk_state["auto_trading_enabled"]
-    risk_manager.state.kill_switch = _prior_risk_state["kill_switch"]
-    risk_manager.state.kill_switch_reason = _prior_risk_state["kill_switch_reason"]
-    risk_manager.state.trades_today = _prior_risk_state["trades_today"]
-    risk_manager.state.realized_pnl_today = _prior_risk_state["realized_pnl_today"]
-    risk_manager.state.trade_day = _prior_risk_state["trade_day"]
-    risk_manager.state.consecutive_losses = _prior_risk_state["consecutive_losses"]
-    risk_manager.state.consecutive_loss_halt = _prior_risk_state["consecutive_loss_halt"]
-    risk_manager.state.last_exit_at = _prior_risk_state["last_exit_at"]
+
+def _restore_paper_risk_state() -> None:
+    """Restores the paper RiskManager from its latest persisted snapshot -
+    see risk_manager.restore_risk_state() (last_exit_at comes back as IST)."""
+    prior_risk_state = db.load_latest_risk_state(scope="paper")
+    if prior_risk_state is not None:
+        restore_risk_state(risk_manager, prior_risk_state)
+
+
+_restore_paper_risk_state()
 
 # Restores each index's paper Auto Trade position/dedup state (see
 # auto_trader.restore_account_state()'s own docstring for the exact
@@ -305,7 +314,10 @@ def auto_trading_status() -> dict:
         "enabled": state.auto_trading_enabled,
         "killSwitch": state.kill_switch,
         "killSwitchReason": state.kill_switch_reason,
+        # Every paper fill today (entries, exits, square-offs) - informational,
+        # unchanged for existing consumers. The trade cap counts entriesToday.
         "tradesToday": state.trades_today,
+        "entriesToday": state.entries_today,
         "realizedPnlToday": state.realized_pnl_today,
         "realizedPnlTodayUnit": risk_manager.limits.daily_loss_limit_unit,
         "consecutiveLosses": state.consecutive_losses,
@@ -315,6 +327,9 @@ def auto_trading_status() -> dict:
             "dailyLossLimit": risk_manager.limits.daily_loss_limit,
             "dailyLossLimitUnit": risk_manager.limits.daily_loss_limit_unit,
             "maxTradesPerDay": risk_manager.limits.max_trades_per_day,
+            # What maxTradesPerDay counts for paper Auto Trade: successful new
+            # entry fills (entriesToday) - exits and square-offs never use it up.
+            "maxTradesPerDayCounts": "NEW_ENTRY_FILLS",
             "maxOpenPositions": risk_manager.limits.max_open_positions,
             "maxQuantity": risk_manager.limits.max_quantity,
             "tradingStart": risk_manager.limits.trading_start.isoformat(),
@@ -377,7 +392,109 @@ def auto_trading_consecutive_loss_halt_reset() -> dict:
     return auto_trading_status()
 
 
+# One paper cycle at a time per index. The scheduler runs cycles on the
+# event-loop thread and the manual "Run cycle now" endpoint runs in FastAPI's
+# threadpool, so two cycles for the SAME index could otherwise interleave and
+# both act on the same strategy event before either advanced the account's
+# last_event_at high-water mark. A second cycle for the same index WAITS (up
+# to the timeout) and then runs normally - it then sees the event as already
+# processed - rather than being dropped; different indices never wait on each
+# other. A cycle still waiting after the timeout fails explicitly with
+# CycleBusyError (logged by the scheduler, HTTP 409 from the endpoint).
+_CYCLE_LOCK_TIMEOUT_SECONDS = 30.0
+_cycle_locks: dict[str, threading.Lock] = {index_id: threading.Lock() for index_id in INDEX_DEFINITIONS}
+
+
+# Global max_open_positions for NEW paper entries across indices: the B5
+# locks above are per index, so two indices' cycles can run at once. Each
+# cycle takes this guard only around its new entry's risk check and fill,
+# with the global open-position count re-read inside it (see
+# auto_trader.run_cycle's entry_guard/open_positions_fn). Always acquired
+# while already holding a per-index lock, never the other way round, and it
+# holds no I/O or database work - no lock-order cycle is possible.
+_entry_guard = threading.Lock()
+
+
+class CycleBusyError(RuntimeError):
+    """Another paper cycle for the same index held its lock past the timeout."""
+
+
+# Repeated paper cycle/persistence failures -> one alert per failure streak
+# (see algoedge.failure_monitor for the kinds and the threshold).
+paper_failure_monitor = RepeatedFailureMonitor()
+
+
 def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
+    lock = _cycle_locks[index_id]
+    if not lock.acquire(timeout=_CYCLE_LOCK_TIMEOUT_SECONDS):
+        paper_failure_monitor.record_failure(index_id, CYCLE, CycleBusyError.__name__)
+        raise CycleBusyError(
+            f"Another paper cycle for {index_id} is still running after {_CYCLE_LOCK_TIMEOUT_SECONDS:.0f}s"
+        )
+    try:
+        response = _execute_and_persist_cycle(index_id, interval, quantity)
+    except Exception as error:
+        # Only the exception TYPE goes into the alert - a raw driver/broker
+        # message can carry connection details; the scheduler/endpoint still
+        # logs the full exception server-side, exactly as before.
+        paper_failure_monitor.record_failure(index_id, CYCLE, type(error).__name__)
+        raise
+    finally:
+        lock.release()  # also when the cycle raises
+    _record_cycle_health(index_id, response)
+    return response
+
+
+def _record_cycle_health(index_id: str, response: dict) -> None:
+    """Feeds a completed cycle's outcome to the repeated-failure monitor."""
+    if response["risk"]["reason"] == REASON_NO_MARKET_DATA:
+        paper_failure_monitor.record_failure(index_id, CYCLE, "no valid market data")
+    elif (response.get("persistence") or {}).get("status") == db.PERSIST_FAILED:
+        paper_failure_monitor.record_failure(index_id, DATABASE, "paper cycle persistence rolled back")
+        paper_failure_monitor.record_success(index_id, (CYCLE,))  # the cycle itself ran
+    else:
+        paper_failure_monitor.record_success(index_id)
+
+
+def _paper_decision(result: AutoTradeCycleResult) -> str | None:
+    """Classifies a cycle outcome that did NOT become a fill for the paper
+    decision audit, or None for fills and routine no-new-signal cycles."""
+    if result.order is not None:
+        return None if result.order.status == "PLACED" else "ORDER_FAILED"
+    if result.risk.allowed:
+        return None
+    reason = result.risk.reason
+    if result.event is None:
+        # Entries are held back until a missed prior-day square-off is resolved;
+        # "no actionable signal"/"already processed"/no data are not decisions.
+        return "SQUARE_OFF_PENDING" if reason.startswith(REASON_MISSED_SQUARE_OFF_WAITING_PREFIX) else None
+    if reason.startswith(REASON_STALE_EXPIRED_PREFIX):
+        return "EXPIRED"
+    if reason == REASON_EXIT_WITHOUT_POSITION:
+        return "SKIPPED"
+    return "BLOCKED"  # a risk/control rule, contract resolution or today's square-off
+
+
+def _paper_decision_row(index_id: str, result: AutoTradeCycleResult, account) -> dict | None:
+    decision = _paper_decision(result)
+    if decision is None:
+        return None
+    event = result.event
+    state = risk_manager.state
+    return {
+        "index_id": index_id, "decision": decision,
+        "reason": (result.order.detail if decision == "ORDER_FAILED" else result.risk.reason)[:255],
+        "event_kind": event.kind if event is not None else None,
+        "event_at": event.timestamp if event is not None else None,
+        "price": event.underlying_price if event is not None else None,
+        "auto_trading_enabled": state.auto_trading_enabled, "kill_switch": state.kill_switch,
+        "consecutive_loss_halt": state.consecutive_loss_halt, "trades_today": state.trades_today,
+        "entries_today": state.entries_today,
+        "realized_pnl_today": state.realized_pnl_today, "open_quantity": account.quantity,
+    }
+
+
+def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
     """Shared by the "Run cycle now" endpoint and the background scheduler,
     so a manual click and a scheduled tick always execute and persist the
     exact same way.
@@ -400,6 +517,8 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
         index_id, interval, risk_manager, order_manager, quantity=quantity,
         total_open_positions=_total_open_positions(),
         resolve_contract_fn=lambda event: _resolve_auto_trade_contract(index_id, event),
+        open_positions_fn=_total_open_positions,
+        entry_guard=_entry_guard,
     )
     if not result.risk.allowed and result.risk.reason == "Daily loss limit reached":
         alerts.raise_alert(
@@ -414,7 +533,13 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
             source="algoedge.auto_trader",
         )
     event = result.event
+    decision_row = _paper_decision_row(index_id, result, order_manager.account)
     if event is None:
+        persistence = None
+        if decision_row is not None:
+            persistence = db.record_paper_cycle(signal=None, decision=decision_row)
+            if persistence == db.PERSIST_FAILED:
+                logger.error("%s: paper decision audit was not persisted (DATABASE_FAILURE)", index_id)
         return {
             "indexId": index_id,
             "interval": interval,
@@ -427,6 +552,10 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
                 "averagePrice": order_manager.account.average_price,
                 "side": order_manager.account.side,
             },
+            "persistence": None if persistence is None else {
+                "status": persistence,
+                "error": alerts.DATABASE_FAILURE if persistence == db.PERSIST_FAILED else None,
+            },
         }
     is_exit = event.kind in ("EXIT_SL", "EXIT_TARGET", "SQUARE_OFF")
     if event.kind == "EXIT_SL":
@@ -437,35 +566,45 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
         exit_reason = exit_reasons.END_OF_SESSION
     else:
         exit_reason = None
-    db.record_signal(
-        source="algoedge.auto_trader", index_id=index_id, timeframe=interval,
-        action=event.kind, reason=event.option_symbol or f"exit @ {event.exit_level}",
-        price=event.underlying_price,
-    )
+    signal_row = {
+        "source": "algoedge.auto_trader", "index_id": index_id, "timeframe": interval,
+        "action": event.kind, "reason": event.option_symbol or f"exit @ {event.exit_level}",
+        "price": event.underlying_price,
+    }
+    order_row = None
     if result.order is not None:
         resolved_contract = order_manager.account.contract or contract_before_cycle
-        db.record_order(
-            source="algoedge.auto_trader", live=False, index_id=index_id,
-            side="SELL" if is_exit else "BUY", right=event.right, strike=event.strike,
-            trading_symbol=resolved_contract.trading_symbol if resolved_contract else None,
-            expiry_date=resolved_contract.expiry if resolved_contract else None,
-            order_type="MARKET", quantity=quantity,
+        order_row = {
+            "source": "algoedge.auto_trader", "live": False, "index_id": index_id,
+            "side": "SELL" if is_exit else "BUY", "right": event.right, "strike": event.strike,
+            "trading_symbol": resolved_contract.trading_symbol if resolved_contract else None,
+            "expiry_date": resolved_contract.expiry if resolved_contract else None,
+            "order_type": "MARKET", "quantity": quantity,
             # The simulated fill (an exit fills at its SL/target level, not the
             # bar close); falls back to the signal price for a FAILED order.
-            price=result.order.fill_price if result.order.fill_price is not None else event.underlying_price,
-            outcome=result.order.status, reason=result.order.detail,
-            realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,
-        )
-        db.record_risk_snapshot(risk_manager, event="TRADE_RECORDED")
-        if result.order.status == "PLACED":
-            # Persists the paper account's post-fill state (quantity/side/
-            # average_price/last_event_at) so a process restart can restore
-            # it - see the startup restoration block above `app = FastAPI()`.
-            # A persistence failure here fails safe: db.record_* never
-            # raises, the in-memory account state (and the order already
-            # placed) is unaffected either way, only next restart's
-            # recovery would be degraded.
-            db.record_auto_trade_account_snapshot(index_id, order_manager.account, event=event.kind)
+            "price": result.order.fill_price if result.order.fill_price is not None else event.underlying_price,
+            "outcome": result.order.status, "reason": result.order.detail,
+            "realized_pnl": result.order.realized_pnl, "exit_reason": exit_reason,
+        }
+    # One transaction for the whole cycle: the signal, the order, the post-fill
+    # risk snapshot and - for a PLACED fill - the account snapshot a restart
+    # restores from (see the startup restoration block above
+    # `app = FastAPI()`). Either all are committed or none: a restart can
+    # never find an order without its account/risk state, or the reverse. A
+    # failure rolls everything back and is surfaced below as DATABASE_FAILURE;
+    # the in-memory paper fill (already made) is unaffected either way.
+    persistence = db.record_paper_cycle(
+        signal=signal_row,
+        order=order_row,
+        risk_manager=risk_manager if order_row is not None else None,
+        account_snapshot=(
+            (index_id, order_manager.account, event.kind)
+            if result.order is not None and result.order.status == "PLACED" else None
+        ),
+        decision=decision_row,
+    )
+    if persistence == db.PERSIST_FAILED:
+        logger.error("%s: paper cycle %s was not persisted (DATABASE_FAILURE, rolled back)", index_id, event.kind)
     return {
         "indexId": index_id,
         "interval": interval,
@@ -493,6 +632,10 @@ def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
             "averagePrice": order_manager.account.average_price,
             "side": order_manager.account.side,
         },
+        "persistence": {
+            "status": persistence,
+            "error": alerts.DATABASE_FAILURE if persistence == db.PERSIST_FAILED else None,
+        },
     }
 
 
@@ -502,7 +645,10 @@ def auto_trading_run(index_id: str, interval: str = "5m", quantity: int = 1) -> 
         raise HTTPException(status_code=404, detail="Unknown index")
     if interval not in TIMEFRAMES:
         raise HTTPException(status_code=400, detail="Unsupported interval")
-    return _run_and_persist_cycle(index_id, interval, quantity)
+    try:
+        return _run_and_persist_cycle(index_id, interval, quantity)
+    except CycleBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/api/auto-trading/signals")
@@ -601,6 +747,9 @@ _scheduler = AutoTradingScheduler(
     run_one=lambda index_id: _run_and_persist_cycle(index_id, "5m", 1),
     is_enabled=lambda: risk_manager.state.auto_trading_enabled and not risk_manager.state.kill_switch,
     tick_seconds=SCHEDULER_TICK_SECONDS,
+    # Disabled/kill-switched: still cycle an index holding a paper position,
+    # so its SL/target exit and the 15:20 square-off still happen.
+    has_open_position=lambda index_id: order_managers[index_id].account.quantity > 0,
 )
 
 

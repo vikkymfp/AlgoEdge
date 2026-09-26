@@ -444,13 +444,13 @@ def test_ordinary_duplicate_signal_dedup_still_works_when_not_near_square_off(mo
 
     first = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
-        now=datetime(2026, 9, 23, 10, 0, tzinfo=IST),
+        now=datetime(2026, 9, 23, 10, 41, tzinfo=IST),
     )
     assert first.order.status == "PLACED"
 
     second = run_cycle(
         "nifty-50", "5m", risk_manager, order_manager, quantity=1,
-        now=datetime(2026, 9, 23, 10, 5, tzinfo=IST),
+        now=datetime(2026, 9, 23, 10, 46, tzinfo=IST),
     )
     assert second.order is None
     assert "duplicate" in second.risk.reason.lower()

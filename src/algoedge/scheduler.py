@@ -13,12 +13,15 @@ class AutoTradingScheduler:
     """Runs one auto-trading cycle per configured index on a fixed cadence,
     independent of the "Run cycle now" button.
 
-    Deliberately a dumb, unconditional ticker: `RiskManager.check()` (inside
-    `run_cycle`) already blocks trading when disabled/kill-switched/outside
-    trading hours, so this loop doesn't duplicate that gating - it only
-    checks `is_enabled()` up front to skip the yfinance candle fetch
-    entirely while auto trading is off, rather than hitting the network
-    every tick for no reason.
+    Deliberately a dumb ticker: `RiskManager.check()` (inside `run_cycle`)
+    already blocks NEW entries when disabled/kill-switched/outside trading
+    hours, so this loop doesn't duplicate that gating. While `is_enabled()`
+    is False it skips the candle fetch for every index EXCEPT those where
+    `has_open_position(index_id)` is True: an open paper position must
+    still reach its SL/target exit and the forced 15:20 square-off, which
+    are risk-reducing and never blocked by those switches. Without
+    `has_open_position` (the default) a disabled tick skips everything,
+    as before.
 
     A failure for one index (e.g. a transient yfinance error) is logged and
     must never stop the loop or block the other indices' ticks.
@@ -30,10 +33,12 @@ class AutoTradingScheduler:
         run_one: Callable[[str], object],
         is_enabled: Callable[[], bool],
         tick_seconds: float = DEFAULT_TICK_SECONDS,
+        has_open_position: Callable[[str], bool] | None = None,
     ) -> None:
         self._index_ids = index_ids
         self._run_one = run_one
         self._is_enabled = is_enabled
+        self._has_open_position = has_open_position
         self._tick_seconds = tick_seconds
         self._task: asyncio.Task | None = None
 
@@ -60,10 +65,13 @@ class AutoTradingScheduler:
             await self._tick()
 
     async def _tick(self) -> None:
-        if not self._is_enabled():
+        enabled = self._is_enabled()
+        if not enabled and self._has_open_position is None:
             return
         for index_id in self._index_ids:
             try:
+                if not enabled and not self._has_open_position(index_id):
+                    continue  # flat and entries are off - nothing risk-reducing to do
                 result = self._run_one(index_id)
                 if isinstance(result, Awaitable):
                     await result

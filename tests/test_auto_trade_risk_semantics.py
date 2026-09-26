@@ -21,7 +21,7 @@ from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, PNL_UNIT_UNDERLYING_POINTS, RiskLimits, RiskManager
 from fno_signals.strategy import TradeEvent
 
-TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
+TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 40, tzinfo=IST)  # the 10:35 entry bar has just closed (B8)
 AT_SQUARE_OFF = datetime(2026, 9, 23, 15, 20, tzinfo=IST)
 
 
