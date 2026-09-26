@@ -327,6 +327,7 @@ def run_cycle(
     # not block it - see RiskManager.check(risk_reducing=...).
     decision = risk_manager.check(
         action, quantity, open_positions, now=now, order_value=order_value, risk_reducing=action == "SELL",
+        cap_new_entries=True,  # paper's max_trades_per_day counts new entries only
     )
     if not decision.allowed:
         return AutoTradeCycleResult(event, decision, None)
@@ -347,6 +348,8 @@ def run_cycle(
             # _account_synced_events); cleared by fill_event() when flat.
             account.stop_loss, account.target = event.stop_loss, event.target
         risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
+        if not is_exit:
+            risk_manager.record_entry(now=now)  # the paper entry cap's counter
         # Deliberately only advanced on a successful fill, not merely on
         # having "seen" the event - a signal blocked by a risk gate this
         # cycle (e.g. auto trading briefly disabled) must still be

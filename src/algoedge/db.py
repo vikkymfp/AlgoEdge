@@ -73,6 +73,7 @@ _PENDING_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
         "consecutive_losses": "INT NOT NULL DEFAULT 0",
         "consecutive_loss_halt": "BIT NOT NULL DEFAULT 0",
         "last_exit_at": "DATETIME2 NULL",
+        "entries_today": "INT NULL",
     },
     "orders": {
         "filled_quantity": "INT NULL",
@@ -89,6 +90,9 @@ _PENDING_COLUMN_MIGRATIONS: dict[str, dict[str, str]] = {
         "contract_strike": "INT NULL",
         "contract_expiry": "DATE NULL",
         "contract_instrument_id": "NVARCHAR(64) NULL",
+    },
+    "paper_decision_events": {
+        "entries_today": "INT NULL",
     },
 }
 
@@ -330,6 +334,7 @@ def record_risk_snapshot(risk_manager: Any, event: str, *, scope: str = "paper")
             kill_switch=state.kill_switch,
             kill_switch_reason=state.kill_switch_reason,
             trades_today=state.trades_today,
+            entries_today=state.entries_today,
             realized_pnl_today=state.realized_pnl_today,
             trade_day=state.trade_day,
             consecutive_losses=state.consecutive_losses,
@@ -360,6 +365,7 @@ def load_latest_risk_state(*, scope: str = "paper") -> dict[str, Any] | None:
             "kill_switch": row.kill_switch,
             "kill_switch_reason": row.kill_switch_reason,
             "trades_today": row.trades_today,
+            "entries_today": row.entries_today,
             "realized_pnl_today": row.realized_pnl_today,
             "trade_day": row.trade_day,
             "consecutive_losses": row.consecutive_losses,
@@ -468,6 +474,7 @@ def _risk_state_row(risk_manager: Any, event: str, *, scope: str) -> RiskStateEv
         kill_switch=state.kill_switch,
         kill_switch_reason=state.kill_switch_reason,
         trades_today=state.trades_today,
+        entries_today=state.entries_today,
         realized_pnl_today=state.realized_pnl_today,
         trade_day=state.trade_day,
         consecutive_losses=state.consecutive_losses,
@@ -515,6 +522,7 @@ def list_paper_decision_events(
                 "eventAt": row.event_at, "price": row.price,
                 "autoTradingEnabled": row.auto_trading_enabled, "killSwitch": row.kill_switch,
                 "consecutiveLossHalt": row.consecutive_loss_halt, "tradesToday": row.trades_today,
+                "entriesToday": row.entries_today,
                 "realizedPnlToday": row.realized_pnl_today, "openQuantity": row.open_quantity,
             }
             for row in query.all()

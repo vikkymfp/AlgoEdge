@@ -1310,7 +1310,9 @@ function renderAutoTradingStatus(status) {
   document.querySelector('#autoLossHaltTag').hidden = !status.consecutiveLossHalt;
   document.querySelector('#autoLossHaltResetButton').hidden = !status.consecutiveLossHalt;
 
-  document.querySelector('#autoTradesToday').textContent = status.tradesToday;
+  // The paper trade cap counts new entry fills only; exits and square-offs never use it up.
+  document.querySelector('#autoTradesToday').textContent =
+    `${status.entriesToday} / ${status.limits.maxTradesPerDay}`;
   document.querySelector('#autoRealizedPnl').textContent = signedRiskAmount(status.realizedPnlToday, status.realizedPnlTodayUnit);
   document.querySelector('#autoMaxOpenPositions').textContent = number(status.limits.maxOpenPositions);
   document.querySelector('#autoDailyLossLimit').textContent = riskAmount(status.limits.dailyLossLimit, status.limits.dailyLossLimitUnit);

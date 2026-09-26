@@ -314,7 +314,10 @@ def auto_trading_status() -> dict:
         "enabled": state.auto_trading_enabled,
         "killSwitch": state.kill_switch,
         "killSwitchReason": state.kill_switch_reason,
+        # Every paper fill today (entries, exits, square-offs) - informational,
+        # unchanged for existing consumers. The trade cap counts entriesToday.
         "tradesToday": state.trades_today,
+        "entriesToday": state.entries_today,
         "realizedPnlToday": state.realized_pnl_today,
         "realizedPnlTodayUnit": risk_manager.limits.daily_loss_limit_unit,
         "consecutiveLosses": state.consecutive_losses,
@@ -324,6 +327,9 @@ def auto_trading_status() -> dict:
             "dailyLossLimit": risk_manager.limits.daily_loss_limit,
             "dailyLossLimitUnit": risk_manager.limits.daily_loss_limit_unit,
             "maxTradesPerDay": risk_manager.limits.max_trades_per_day,
+            # What maxTradesPerDay counts for paper Auto Trade: successful new
+            # entry fills (entriesToday) - exits and square-offs never use it up.
+            "maxTradesPerDayCounts": "NEW_ENTRY_FILLS",
             "maxOpenPositions": risk_manager.limits.max_open_positions,
             "maxQuantity": risk_manager.limits.max_quantity,
             "tradingStart": risk_manager.limits.trading_start.isoformat(),
@@ -473,6 +479,7 @@ def _paper_decision_row(index_id: str, result: AutoTradeCycleResult, account) ->
         "price": event.underlying_price if event is not None else None,
         "auto_trading_enabled": state.auto_trading_enabled, "kill_switch": state.kill_switch,
         "consecutive_loss_halt": state.consecutive_loss_halt, "trades_today": state.trades_today,
+        "entries_today": state.entries_today,
         "realized_pnl_today": state.realized_pnl_today, "open_quantity": account.quantity,
     }
 

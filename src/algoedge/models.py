@@ -96,7 +96,10 @@ class RiskStateEvent(Base):
     auto_trading_enabled: Mapped[bool] = mapped_column(Boolean)
     kill_switch: Mapped[bool] = mapped_column(Boolean)
     kill_switch_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    trades_today: Mapped[int] = mapped_column(Integer)
+    trades_today: Mapped[int] = mapped_column(Integer)  # every fill (entries, exits, square-offs)
+    # Paper Auto Trade's successful NEW ENTRY fills today (its trade cap's
+    # unit). NULL in rows saved before this column existed.
+    entries_today: Mapped[int | None] = mapped_column(Integer, nullable=True)
     realized_pnl_today: Mapped[float] = mapped_column(Float)
     trade_day: Mapped[str | None] = mapped_column(String(10), nullable=True)
     consecutive_losses: Mapped[int] = mapped_column(Integer, default=0)
@@ -167,7 +170,8 @@ class PaperDecisionEvent(Base):
     auto_trading_enabled: Mapped[bool] = mapped_column(Boolean)
     kill_switch: Mapped[bool] = mapped_column(Boolean)
     consecutive_loss_halt: Mapped[bool] = mapped_column(Boolean)
-    trades_today: Mapped[int] = mapped_column(Integer)
+    trades_today: Mapped[int] = mapped_column(Integer)  # every fill today
+    entries_today: Mapped[int | None] = mapped_column(Integer, nullable=True)  # the paper entry cap's count
     realized_pnl_today: Mapped[float] = mapped_column(Float)
     open_quantity: Mapped[int] = mapped_column(Integer)
 
