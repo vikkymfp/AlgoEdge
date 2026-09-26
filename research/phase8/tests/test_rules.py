@@ -310,14 +310,91 @@ def test_a_halt_block_without_a_recorded_halt_fails() -> None:
 # ---------------- R3: exits under entry restrictions ----------------
 
 
-def test_a_risk_reducing_exit_is_filled_while_halted_and_kill_switched() -> None:
+def test_a_risk_reducing_exit_is_filled_with_the_kill_switch_engaged_before_it() -> None:
     s = Session()
     for hour in (10, 11):
         s.entry("nifty-50", f"{hour}:00:30")
         s.exit("nifty-50", f"{hour}:20:05", 95.0, kind="EXIT_SL")
     s.entry("nifty-50", "12:00:30")
     s.control("12:10:00", "KILL_SWITCH_ON")
-    s.exit("nifty-50", "12:20:05", 95.0, kind="EXIT_SL")  # third loss: halted; kill switch on - still exits
+    # The third loss: the kill switch was engaged before this exit and it still fills. It also
+    # trips the halt, but that halt is this exit's own result - only the kill switch counts.
+    s.exit("nifty-50", "12:20:05", 95.0, kind="EXIT_SL")
+    report = s.reconcile()
+    assert status(report, "EXIT_RULES") == "PASS"
+    assert report["checks"]["EXIT_RULES"]["observations"]["exits_filled_while_restricted"] == 1
+
+
+def test_the_loss_that_trips_the_halt_is_not_an_exit_under_the_halt() -> None:
+    # Regression: the third loss's own risk row records the halt it just tripped (post-trade
+    # state). Before that exit nothing was restricted, so it is not R3 evidence.
+    s = losing_streak()
+    third_exit_row = s.tables["risk_state_events"][-1]
+    assert third_exit_row["consecutive_loss_halt"] is True  # the trap: the post-trade row shows the halt
+    report = s.reconcile()
+    assert status(report, "EXIT_RULES") == "UNVERIFIABLE"
+    assert report["checks"]["EXIT_RULES"]["observations"]["exits_filled_while_restricted"] == 0
+    assert report["checks"]["EXIT_RULES"]["evaluated"] == 0
+    assert "EXIT_UNDER_RESTRICTION_NOT_EXERCISED" in codes(report, "EXIT_RULES")
+
+
+def test_a_kill_switch_engaged_after_the_exits_engine_time_does_not_count() -> None:
+    # Regression: engine time 10:20:00 (last_exit_at), kill switch at 10:20:03, commit at
+    # 10:20:05. The exit's own row shows the kill switch, but the exit was decided before it.
+    s = Session()
+    s.entry("nifty-50", "10:00:30")
+    s.control("10:20:03", "KILL_SWITCH_ON")
+    s.exit("nifty-50", "10:20:05", 95.0, kind="EXIT_SL", cycle_seconds=5)
+    assert s.tables["risk_state_events"][-1]["kill_switch"] is True  # the post-trade row shows it
+    report = s.reconcile()
+    assert status(report, "EXIT_RULES") == "UNVERIFIABLE"
+    assert report["checks"]["EXIT_RULES"]["observations"]["exits_filled_while_restricted"] == 0
+
+
+def test_the_exits_own_row_is_never_pre_exit_state_even_with_a_lagging_database_clock() -> None:
+    # Regression: created_at comes from the database clock, last_exit_at from the app clock.
+    # Here the database clock lags by 10 s, so the exit's whole transaction (signal, order,
+    # risk row, snapshot) is dated BEFORE its engine time. Its own post-trade risk row, which
+    # records a kill switch, must still never be read as the state before the exit.
+    s = Session()
+    s.entry("nifty-50", "10:00:30")
+    counts = {table: len(rows) for table, rows in s.tables.items()}
+    s.exit("nifty-50", "10:20:05", 95.0, kind="EXIT_SL", cycle_seconds=5, record={"kill_switch": True})
+    for table, rows in s.tables.items():
+        for row in rows[counts[table]:]:  # this exit's rows only
+            row["created_at"] = (datetime.fromisoformat(row["created_at"]) - timedelta(seconds=10)).isoformat()
+    own_risk = s.tables["risk_state_events"][-1]
+    assert own_risk["created_at"] < own_risk["last_exit_at"] and own_risk["kill_switch"] is True  # the trap
+    report = s.reconcile()
+    assert report["groups"]["by_status"]["RECONCILED"] == 2  # the exit's group is intact
+    assert status(report, "EXIT_RULES") == "UNVERIFIABLE"
+    assert report["checks"]["EXIT_RULES"]["observations"]["exits_filled_while_restricted"] == 0
+
+
+def test_an_exit_with_no_prior_state_and_no_baseline_is_unverifiable() -> None:
+    # A position carried in from before the range, no risk state before the exit and no
+    # baseline: the pre-exit state is unknown, so the exit's own (restricted) row never passes R3.
+    s = Session()
+    s.baseline["account_snapshot:nifty-50"] = {"quantity": 1, "side": "CALL", "average_price": 100.0,
+                                                "last_event_at": "2026-10-01T09:50:00"}
+    s.holding["nifty-50"] = (100.0, "CALL")
+    s.state["kill_switch"] = True  # would count if the exit's own row were used
+    s.exit("nifty-50", "10:20:05", 95.0, kind="EXIT_SL")
+    report = s.reconcile()
+    observations = report["checks"]["EXIT_RULES"]["observations"]
+    assert status(report, "EXIT_RULES") == "UNVERIFIABLE"
+    assert (observations["exits_pre_state_unknown"], observations["exits_filled_while_restricted"]) == (1, 0)
+
+
+def test_the_baseline_supplies_the_pre_exit_state_when_nothing_precedes_the_exit() -> None:
+    baseline = {"trade_day": DAY.isoformat(), "entries_today": 1, "trades_today": 1, "realized_pnl_today": 0.0,
+                "consecutive_losses": 0, "consecutive_loss_halt": False, "auto_trading_enabled": False,
+                "kill_switch": False, "last_exit_at": None}
+    s = Session(baseline_risk=baseline)  # auto trading was disabled before the range
+    s.baseline["account_snapshot:nifty-50"] = {"quantity": 1, "side": "CALL", "average_price": 100.0,
+                                                "last_event_at": "2026-10-01T09:50:00"}
+    s.holding["nifty-50"] = (100.0, "CALL")
+    s.exit("nifty-50", "10:20:05", 95.0, kind="EXIT_SL")
     report = s.reconcile()
     assert status(report, "EXIT_RULES") == "PASS"
     assert report["checks"]["EXIT_RULES"]["observations"]["exits_filled_while_restricted"] == 1

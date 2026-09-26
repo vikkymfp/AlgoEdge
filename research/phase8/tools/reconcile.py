@@ -803,6 +803,32 @@ class Reconciler:
         exact = db_time(risk.get("last_exit_at")) if risk else None
         return (exact, exact) if exact is not None else (fill.at - self.clock_tol, fill.at)
 
+    def _state_before_exit(self, fill: Fill) -> tuple[dict[str, Any] | None, str | None]:
+        """The restriction state an exit was decided under: the latest paper
+        risk or decision row created before the exit's engine time (every
+        change to the three flags persists such a row), else the extract's
+        baseline. Never the exit's own row - that one is written after
+        record_trade(), so it already shows a halt this very exit tripped.
+        Returns (None, reason) when the pre-exit state cannot be known."""
+        lo, hi = self._exit_engine_time(fill)
+        # The exit's own transaction-group risk row(s) are excluded by identity, not by time:
+        # created_at comes from the database clock and last_exit_at from the app clock, so a
+        # lagging database clock could otherwise date the post-trade row before the exit.
+        own = {row["id"] for row in (fill.group.candidates.get("risk", []) if fill.group else [])}
+        rows = [("risk_state_events", r) for r in self.rows("risk_state_events")
+                if r.get("scope") == "paper" and r["id"] not in own] \
+            + [("paper_decision_events", d) for d in self.rows("paper_decision_events")]
+        if lo != hi and any(lo <= db_time(r["created_at"]) <= hi for _table, r in rows):
+            return None, "a state row falls inside the exit's engine-clock window"
+        prior = [(db_time(r["created_at"]), table == "risk_state_events", r["id"], r) for table, r in rows
+                 if db_time(r["created_at"]) < lo]
+        if prior:
+            return max(prior, key=lambda item: item[:3])[3], None
+        baseline = self.x.baseline.get("risk_state")
+        if baseline is not None:
+            return baseline, None
+        return None, "no persisted state before the exit and no baseline"
+
     def _last_exit_before(self, at: datetime) -> tuple[str, Any]:
         """('fill', Fill) | ('baseline', datetime) | ('none', None) |
         ('ambiguous', Fill) for the exit whose last_exit_at the engine held at `at`."""
@@ -1013,10 +1039,14 @@ class Reconciler:
         for fill in self.fills:
             if fill.is_entry:
                 continue
-            risk = fill.group.member("risk") if fill.group else None
-            if risk is None:
+            # Only a restriction already active BEFORE the exit's cycle counts: the
+            # exit's own risk row shows the post-trade state (e.g. the halt its own
+            # loss just tripped, or a switch flipped while the cycle ran).
+            before, _reason = self._state_before_exit(fill)
+            if before is None:
+                self.observations[check]["exits_pre_state_unknown"] += 1
                 continue
-            active, missing = self._restrictions(risk)
+            active, missing = self._restrictions(before)
             if active and not missing:
                 self.evaluated[check] += 1
                 self.observations[check]["exits_filled_while_restricted"] += 1
