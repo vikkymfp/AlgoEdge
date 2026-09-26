@@ -82,3 +82,38 @@ def test_each_launch_gets_its_own_new_file(tmp_path, root_logging):
     first = launch.configure_logging(tmp_path, run_id="a1")
     second = launch.configure_logging(tmp_path, run_id="b2")
     assert first != second and sorted(p.name for p in tmp_path.iterdir()) == sorted([first.name, second.name])
+
+
+# ---------------- --port ----------------
+
+
+def run_main(monkeypatch, argv):
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: calls.append((app, kwargs)))
+    assert launch.main(argv) == 0
+    return calls
+
+
+def test_the_default_port_is_unchanged(tmp_path, root_logging, monkeypatch):
+    from algoedge import web_server
+
+    ((app, kwargs),) = run_main(monkeypatch, ["--log-dir", str(tmp_path)])
+    assert app is web_server.app
+    assert kwargs == {"host": "127.0.0.1", "port": 5173, "log_level": "warning"}  # as web_server.main()
+
+
+def test_the_selected_port_is_passed_to_uvicorn_on_loopback(tmp_path, root_logging, monkeypatch):
+    ((_app, kwargs),) = run_main(monkeypatch, ["--log-dir", str(tmp_path), "--port", "5180"])
+    assert kwargs == {"host": "127.0.0.1", "port": 5180, "log_level": "warning"}
+    flush(root_logging)
+    (log,) = tmp_path.iterdir()
+    assert "dashboard on http://127.0.0.1:5180" in log.read_text(encoding="utf-8")  # the evidence names its port
+
+
+@pytest.mark.parametrize("port", ["0", "65536", "-1", "abc"])
+def test_an_invalid_port_is_rejected_before_anything_starts(tmp_path, root_logging, monkeypatch, port):
+    calls = []
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kwargs: calls.append(kwargs))
+    with pytest.raises(SystemExit):
+        launch.main(["--log-dir", str(tmp_path / "logs"), "--port", port])
+    assert calls == [] and not (tmp_path / "logs").exists()  # no server, no evidence log created

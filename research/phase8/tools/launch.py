@@ -5,12 +5,18 @@ Phase 8.1 protocol (section 3.3). The engine's own entry point
 "warning", so its INFO lines (paper fills, dropped invalid bars, persistence
 failures) would otherwise never be emitted.
 
-This changes only the logging configuration of the process. Host, port and
-app are exactly those of algoedge.web_server.main(); no engine code is
-modified or wrapped. Every log line passes through the same redaction the
+This changes only the logging configuration of the process. Host and app
+are exactly those of algoedge.web_server.main(), and so is the port unless
+--port selects another; no engine code is modified or wrapped. Every log line passes through the same redaction the
 evidence tools use.
 
     PYTHONPATH=src:. python -m research.phase8.tools.launch --log-dir research/phase8/evidence/<campaign>/logs
+
+`--port` (default 5173, the engine's own port) selects a different loopback
+port, e.g. to run a dedicated Phase 8 dashboard beside another one already
+using 5173. The host is always 127.0.0.1. The database is still chosen only
+by the ALGOEDGE_DB_* settings; point the other tools at the same port with
+their --base-url.
 """
 
 from __future__ import annotations
@@ -21,6 +27,8 @@ from pathlib import Path
 
 from research.phase8.tools.common import IST, new_run_id, redact, utc_now
 
+HOST = "127.0.0.1"
+DEFAULT_PORT = 5173  # algoedge.web_server.main()'s port
 FORMAT = "%(asctime)s %(levelname)s %(name)s [%(threadName)s] %(message)s"
 
 
@@ -59,17 +67,27 @@ def configure_logging(log_dir: Path, *, run_id: str | None = None) -> Path:
     return path
 
 
+def _port(text: str) -> int:
+    port = int(text)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError(f"port must be 1-65535, got {port}")
+    return port
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--log-dir", type=Path, required=True)
+    parser.add_argument("--port", type=_port, default=DEFAULT_PORT,
+                        help=f"loopback port for the dashboard (default {DEFAULT_PORT})")
     args = parser.parse_args(argv)
     path = configure_logging(args.log_dir)
-    logging.getLogger("research.phase8.launch").info("Phase 8 launcher: logging to %s", path)
+    logging.getLogger("research.phase8.launch").info("Phase 8 launcher: logging to %s; dashboard on http://%s:%d",
+                                                     path, HOST, args.port)
     import uvicorn
 
     from algoedge.web_server import app  # imported only after logging is configured
 
-    uvicorn.run(app, host="127.0.0.1", port=5173, log_level="warning")  # as algoedge.web_server.main()
+    uvicorn.run(app, host=HOST, port=args.port, log_level="warning")  # as algoedge.web_server.main(), port selectable
     return 0
 
 
