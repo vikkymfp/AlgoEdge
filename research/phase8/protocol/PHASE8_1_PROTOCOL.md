@@ -2,10 +2,16 @@
 
 | | |
 |---|---|
-| Protocol version | **8.1-v1 (DRAFT, not signed off)** |
+| Protocol version | **8.1-v1 (SIGNED OFF)** |
 | Baseline (engine under test) | `06eba8cb6cedfbdc41585f362dd6c07424aed120` (`main`, "Merge pull request #6"). `src/` must be byte-identical to this commit; preflight check G enforces this. |
 | Evidence tooling | Phase 8.0, `research/phase8/tools/` (see `../README.md`) |
 | Scope | **Paper/simulation only.** Validation of the frozen engine, not strategy research. |
+
+**Sign-off.** Protocol version 8.1-v1 was formally signed off on 2026-09-26 at
+checkpoint `ff5fdf6` (evidence tooling and this protocol, after the final
+read-only review). **Execution remains blocked** until the final environment
+preflight (`research.phase8.tools.preflight`) reports READY on the campaign
+host.
 
 Once signed off, the criteria below cannot change for this version. Any
 amendment is a new version. Results collected under a version are reported
