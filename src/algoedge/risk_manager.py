@@ -159,13 +159,20 @@ class RiskManager:
         *,
         order_value: float | None = None,
         capital_allocated: float | None = None,
+        risk_reducing: bool = False,
     ) -> RiskDecision:
+        """`risk_reducing=True` marks a SELL that closes an existing paper
+        position (a strategy SL/target exit): the kill switch and the
+        auto-trading-enabled switch stop NEW risk, so they must not trap an
+        open position without its exit. Ignored for BUY. Off by default, so
+        every other caller is unchanged."""
         now = now or datetime.now(IST)
         self._reset_if_new_day(now)
 
         if action not in {"BUY", "SELL"}:
             return RiskDecision(False, f"Unsupported action: {action}")
-        if self.state.kill_switch:
+        exit_only = risk_reducing and action == "SELL"
+        if self.state.kill_switch and not exit_only:
             reason = self.state.kill_switch_reason or "no reason recorded"
             return RiskDecision(False, f"Emergency kill switch is engaged ({reason})")
         if self.state.consecutive_loss_halt:
@@ -173,7 +180,7 @@ class RiskManager:
                 False,
                 f"Trading halted after {self.state.consecutive_losses} consecutive losses - reset required",
             )
-        if not self.state.auto_trading_enabled:
+        if not self.state.auto_trading_enabled and not exit_only:
             return RiskDecision(False, "Auto trading is disabled")
         if not (self.limits.trading_start <= now.time() <= self.limits.trading_end):
             return RiskDecision(False, "Outside configured trading hours")

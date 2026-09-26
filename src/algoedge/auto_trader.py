@@ -291,7 +291,12 @@ def run_cycle(
     # driven by event.kind directly, not this simplification.
     action = "BUY" if event.kind in _ENTRY_KINDS else "SELL"
     order_value = quantity * event.underlying_price
-    decision = risk_manager.check(action, quantity, open_positions, now=now, order_value=order_value)
+    # An exit only closes the position this account already holds, so the
+    # kill switch / auto-trading-disabled gates (which stop NEW risk) must
+    # not block it - see RiskManager.check(risk_reducing=...).
+    decision = risk_manager.check(
+        action, quantity, open_positions, now=now, order_value=order_value, risk_reducing=action == "SELL",
+    )
     if not decision.allowed:
         return AutoTradeCycleResult(event, decision, None)
 

@@ -600,6 +600,9 @@ _scheduler = AutoTradingScheduler(
     run_one=lambda index_id: _run_and_persist_cycle(index_id, "5m", 1),
     is_enabled=lambda: risk_manager.state.auto_trading_enabled and not risk_manager.state.kill_switch,
     tick_seconds=SCHEDULER_TICK_SECONDS,
+    # Disabled/kill-switched: still cycle an index holding a paper position,
+    # so its SL/target exit and the 15:20 square-off still happen.
+    has_open_position=lambda index_id: order_managers[index_id].account.quantity > 0,
 )
 
 
