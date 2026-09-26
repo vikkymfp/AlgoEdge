@@ -141,7 +141,7 @@ Otherwise the result is INCONCLUSIVE.
 
 | ID | Criterion | Evidence / tool check |
 |---|---|---|
-| D1 | Every fill price is a real bar value: an entry at its bar's close, an exit at its SL/target level, a square-off/late exit/recovery at the latest close | reconcile `BARS` |
+| D1 | Every fill price is a real bar value: an entry at its bar's close, an exit at its SL/target level, a square-off/late exit/recovery at the latest close | `BARS`: entry = captured close of its bar; square-off/recovery = a captured close, else UNVERIFIABLE; an SL/target exit inside its bar's high-low range is *supporting evidence only*. `D1_EXIT_LEVEL`: an SL/target exit equals the level rebuilt from its entry's canonical replay on captured bars (SL/TP are not persisted); UNVERIFIABLE without bar evidence, for a late exit, or when the entry replay did not match |
 | D2 | No entry from a still-forming bar (`event_at + 5 min ≤ fill time`) | `BARS` FORMING_BAR_ENTRY |
 | D3 | No entry from a bar older than the freshness window; stale events are EXPIRED | `S1_REPLAY`, `AUDIT` |
 | D4 | No fill from an invalid-OHLC bar | `BARS` INVALID_BAR_FILL |
@@ -150,9 +150,9 @@ Otherwise the result is INCONCLUSIVE.
 | S3 | Every fill and audited decision has its signal row in the same transaction | `P1_GROUPING` |
 | R1 | Global open positions never exceed 1 | `R1_MAX_OPEN`; status `MAX_OPEN_OBSERVED` |
 | R2 | `entries_today` rises only on PLACED entries; blocked, failed, expired, exit and square-off events never raise it; it resets each IST day (lazily, as designed) | `R2_COUNTERS` |
-| R3 | Exits, square-off and recovery are never blocked by the kill switch, disabled state or halt | drills, `AUDIT` |
-| R4 | Square-off at the first cycle between 15:20 and 15:30; a missed one is recovered the next session before any entry | drills R-4a/R-4b, `TRANSITIONS` |
-| R5 | No entry after 15:00, inside the cooldown or past the cap; the halt trips at 3 losses and holds | `AUDIT`, `R2_COUNTERS` |
+| R3 | Exits, square-off and recovery are never blocked by the kill switch, disabled state or halt | `EXIT_RULES`: no SL/target exit decision BLOCKED by kill switch/disabled/halt; exits filled while a restriction is recorded are counted, and R3 is UNVERIFIABLE until at least one occurs. `DECISION_STATE`; drills |
+| R4 | Square-off at the first cycle between 15:20 and 15:30; a missed one is recovered the next session before any entry | `SQUARE_OFF`: a same-day forced close commits between 15:20 and 15:30 with `square_off_date` recorded, and later than the first scheduler tick after 15:20 is UNRECONCILED; a position still open after 15:30 is a missed square-off (FAIL, unless across a restart); a prior-day position must be closed by the recovery square-off, in session, as the index's first fill of the day. `TRANSITIONS`; drills R-4a/R-4b |
+| R5 | No entry after 15:00, inside the cooldown or past the cap; the halt trips at 3 losses and holds | `ENTRY_RULES`: every PLACED entry against the session open/15:00 cutoff, the cooldown after the last exit's engine time, the daily new-entry cap, and the disabled/kill-switch/halt state in its own risk row. `HALT`: the loss streak and halt replayed against every risk and decision row (trips at 3, a win keeps it, only the reset clears it, it survives restarts); UNVERIFIABLE until a trip occurs. `DECISION_STATE`: each BLOCKED reason agrees with its recorded state, and the cooldown boundary is exact. `R2_COUNTERS` |
 | C1 | R1 holds during the concurrency drills | `R1_MAX_OPEN` on drill sessions |
 | C2 | No strategy event is filled twice | `C2_DUPLICATES` |
 | C3 | No deadlock; every drill request returns; any 409 is explained | drill evidence |
@@ -166,6 +166,11 @@ Otherwise the result is INCONCLUSIVE.
 | UI1 | Dashboard quantity/side equal the persisted state (poll-lag tolerant) | `DASHBOARD` |
 | UI2 | `entriesToday` equals the persisted counter (lazy day reset allowed) | `DASHBOARD` |
 | UI3 | Dashboard limits equal the frozen `RiskLimits` | `DASHBOARD` LIMITS_CHANGED, preflight F |
+
+Evidence notes (tool behaviour, not criteria):
+
+- An entry's engine time is not persisted. Time rules allow for it with the reconciler's engine-clock tolerance (default 120 s): FAIL only if the rule is violated for every possible engine time, PASS only if it holds for every one, otherwise UNVERIFIABLE.
+- A check with nothing in range to evaluate is UNVERIFIABLE, never PASS. Criterion verdicts come from reconciling the whole campaign range; each check reports the criteria it serves.
 
 ## 7. Drills (first eligible opportunity on or after the listed session)
 

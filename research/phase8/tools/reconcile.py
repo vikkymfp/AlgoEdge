@@ -16,6 +16,18 @@ Rules (Phase 8.1 protocol section 3.7):
   underlying points, audit rows, bar evidence (D1/D2/D4), the canonical
   entry replay (S1) and the dashboard samples are then checked against
   that reconstruction.
+- Risk rules: entry window/cutoff, cooldown, daily cap and entries while
+  restricted (R5), the consecutive-loss halt (R5), exits under entry
+  restrictions (R3), square-off timing and missed-square-off recovery (R4),
+  blocked decisions against their recorded state, and exits at the exact
+  reconstructed SL/target level (D1).
+
+Engine clock: a cycle takes `now` when it starts and commits its rows when
+it ends. Exits persist their engine time (risk_state_events.last_exit_at);
+entries do not, so an entry's engine time is only known to lie in
+[created_at - engine_clock_tolerance, created_at]. A time rule is FAIL only
+when violated for every time in that interval, PASS only when satisfied for
+every time in it, and UNVERIFIABLE otherwise.
 
 Every check ends PASS, FAIL, UNRECONCILED or UNVERIFIABLE (not enough
 evidence). Any FAIL of severity P0 sets `stop_campaign`.
@@ -61,10 +73,27 @@ ENTRY_KINDS = {"ENTRY_CALL": "CALL", "ENTRY_PUT": "PUT"}
 EXIT_KINDS = {"EXIT_SL", "EXIT_TARGET", "SQUARE_OFF"}
 DECISIONS = {"BLOCKED", "EXPIRED", "SKIPPED", "ORDER_FAILED", "SQUARE_OFF_PENDING"}
 MONEY_TOLERANCE = 1e-6
+ENGINE_CLOCK_TOLERANCE = timedelta(seconds=120)  # assumed upper bound on a cycle's start-to-commit time
+LEVEL_EXITS = ("EXIT_SL", "EXIT_TARGET")
+# The scheduler sleeps this long between ticks (algoedge.web_server.SCHEDULER_TICK_SECONDS; not imported -
+# importing web_server starts the app). The first tick after 15:20 therefore starts within one tick.
+SCHEDULER_TICK = timedelta(seconds=300)
+RESTRICTION_REASONS = ("Emergency kill switch is engaged", "Trading halted after", "Auto trading is disabled")
+CONTROL_EVENTS = {"ENABLE", "DISABLE", "KILL_SWITCH_ON", "KILL_SWITCH_OFF", "CONSECUTIVE_LOSS_HALT_RESET"}
+UNBLOCKING_EVENTS = {"ENABLE", "KILL_SWITCH_OFF", "CONSECUTIVE_LOSS_HALT_RESET"}
 BEGINNING = datetime(1970, 1, 1, tzinfo=IST)  # "before the range" in a position timeline
 
 CHECKS = ("LIVE_ORDERS", "P1_GROUPING", "TRANSITIONS", "R1_MAX_OPEN", "C2_DUPLICATES", "R2_COUNTERS",
-          "PNL", "AUDIT", "BARS", "S1_REPLAY", "DASHBOARD")
+          "PNL", "AUDIT", "BARS", "S1_REPLAY", "DASHBOARD", "ENTRY_RULES", "HALT", "EXIT_RULES",
+          "SQUARE_OFF", "DECISION_STATE", "D1_EXIT_LEVEL")
+# Which Phase 8.1 criteria each check provides evidence for (protocol section 6).
+PROTOCOL_CRITERIA = {
+    "LIVE_ORDERS": ["scope"], "P1_GROUPING": ["P1", "P3", "S3", "A1"], "TRANSITIONS": ["P2", "R4"],
+    "R1_MAX_OPEN": ["R1", "C1"], "C2_DUPLICATES": ["C2"], "R2_COUNTERS": ["R2"], "PNL": ["P&L"],
+    "AUDIT": ["A1", "A2"], "BARS": ["D1", "D2", "D4"], "S1_REPLAY": ["S1", "D3"], "DASHBOARD": ["UI1", "UI2", "UI3", "R1"],
+    "ENTRY_RULES": ["R5", "R1"], "HALT": ["R5"], "EXIT_RULES": ["R3"], "SQUARE_OFF": ["R4"],
+    "DECISION_STATE": ["R3", "R5"], "D1_EXIT_LEVEL": ["D1"],
+}
 
 
 # ---------------------------------------------------------------- inputs
@@ -166,7 +195,8 @@ class Fill:
 class Reconciler:
     def __init__(self, extraction: Extraction, *, captures: dict[str, list[CaptureWindow]] | None = None,
                  status_samples: list[dict[str, Any]] | None = None, tampered_samples: int = 0,
-                 max_open_positions: int | None = None, status_lag: timedelta = timedelta(seconds=65)) -> None:
+                 max_open_positions: int | None = None, status_lag: timedelta = timedelta(seconds=65),
+                 engine_clock_tolerance: timedelta = ENGINE_CLOCK_TOLERANCE) -> None:
         self.x = extraction
         self.captures = captures
         self.samples = status_samples
@@ -174,7 +204,10 @@ class Reconciler:
         self.limits = RiskLimits()
         self.max_open = max_open_positions if max_open_positions is not None else self.limits.max_open_positions
         self.status_lag = status_lag
+        self.clock_tol = engine_clock_tolerance
         self.findings: list[Finding] = []
+        self.observations: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+        self.replayed: dict[int, Any] = {}  # entry order id -> the matching canonical TradeEvent
         self.evaluated: dict[str, int] = defaultdict(int)
         self.groups: list[Group] = []
         self.fills: list[Fill] = []
@@ -634,8 +667,10 @@ class Reconciler:
                 high_water = candidate.timestamp.to_pydatetime()
             bar_at = db_time(snapshot.get("last_event_at"))
             evidence = [ref("orders", fill.order), ref("auto_trade_account_snapshots", snapshot)]
-            if chosen is None or chosen.kind != fill.kind or chosen.timestamp != pd.Timestamp(bar_at) \
-                    or not _same(chosen.underlying_price, float(fill.order["price"])):
+            if chosen is not None and chosen.kind == fill.kind and chosen.timestamp == pd.Timestamp(bar_at) \
+                    and _same(chosen.underlying_price, float(fill.order["price"])):
+                self.replayed[fill.order["id"]] = chosen
+            else:
                 got = None if chosen is None else (chosen.kind, chosen.timestamp.isoformat(), chosen.underlying_price)
                 self.add("S1_REPLAY", "UNRECONCILED", "REPLAY_MISMATCH",
                          f"canonical replay on captured bars gives {got}, paper filled "
@@ -735,6 +770,524 @@ class Reconciler:
             return {last[2]}
         return {0, last[2]}  # lazy day reset
 
+    # -- 8. risk rules: shared evidence helpers
+    def _restrictions(self, row: dict[str, Any]) -> tuple[list[str], list[str]]:
+        """Entry restrictions active in a recorded state row, and any of the
+        three state fields that are missing (never read as "inactive")."""
+        active, missing = [], []
+        for name, field_name, blocked_when in (("auto trading disabled", "auto_trading_enabled", False),
+                                                ("kill switch", "kill_switch", True),
+                                                ("consecutive-loss halt", "consecutive_loss_halt", True)):
+            value = row.get(field_name)
+            if value is None:
+                missing.append(field_name)
+            elif bool(value) is blocked_when:
+                active.append(name)
+        return active, missing
+
+    def _state_changes_near(self, at: datetime, events: set[str], *, other_exits_of: str | None = None) -> list[str]:
+        """Control rows (and optionally other indices' exits, which can trip
+        the halt) that landed between a cycle's engine time and its commit."""
+        lo, hi = at - self.clock_tol, at + GROUP_TOLERANCE
+        found = [ref("risk_state_events", r) for r in self.rows("risk_state_events")
+                 if r.get("scope") == "paper" and r.get("event") in events and lo <= db_time(r["created_at"]) <= hi]
+        if other_exits_of is not None:
+            found += [ref("orders", f.order) for f in self.fills
+                      if not f.is_entry and f.index_id != other_exits_of and lo <= f.at <= hi]
+        return found
+
+    def _exit_engine_time(self, fill: Fill) -> tuple[datetime, datetime]:
+        """An exit's engine time: exact from its risk row's last_exit_at,
+        else only bounded by its commit time."""
+        risk = fill.group.member("risk") if fill.group else None
+        exact = db_time(risk.get("last_exit_at")) if risk else None
+        return (exact, exact) if exact is not None else (fill.at - self.clock_tol, fill.at)
+
+    def _last_exit_before(self, at: datetime) -> tuple[str, Any]:
+        """('fill', Fill) | ('baseline', datetime) | ('none', None) |
+        ('ambiguous', Fill) for the exit whose last_exit_at the engine held at `at`."""
+        prior = [f for f in self.fills if not f.is_entry and f.at <= at + GROUP_TOLERANCE]
+        if prior:
+            latest = max(prior, key=lambda f: (f.at, f.order["id"]))
+            return ("ambiguous" if abs(latest.at - at) <= GROUP_TOLERANCE else "fill"), latest
+        baseline = db_time((self.x.baseline.get("risk_state") or {}).get("last_exit_at"))
+        return ("baseline", baseline) if baseline is not None else ("none", None)
+
+    # -- 8a. R5 entry rules (+ R1 via R1_MAX_OPEN)
+    def check_entry_rules(self) -> None:
+        limits, check = self.limits, "ENTRY_RULES"
+        cooldown = timedelta(minutes=limits.cooldown_minutes)
+        baseline = self.x.baseline.get("risk_state") or {}
+        day, count, known, first_day = None, 0, True, True
+        for fill in self.fills:
+            if not fill.is_entry:
+                continue
+            self.evaluated[check] += 1
+            at, earliest = fill.at, fill.at - self.clock_tol
+            evidence = [ref("orders", fill.order)]
+            same_day = earliest.date() == at.date()
+            # Trading window and entry cutoff (engine: now.time() in [09:15, 15:00]).
+            if at.time() < limits.trading_start:
+                self.add(check, "FAIL", "ENTRY_BEFORE_OPEN", f"entry committed {at.time()} < {limits.trading_start}",
+                         severity="P0", index_id=fill.index_id, at=at, evidence=evidence)
+            elif same_day and earliest.time() < limits.trading_start:
+                self.add(check, "UNVERIFIABLE", "ENTRY_OPEN_BOUNDARY",
+                         "entry within the engine-clock tolerance of the session open", index_id=fill.index_id,
+                         at=at, evidence=evidence)
+            if same_day and earliest.time() > limits.entry_cutoff:
+                self.add(check, "FAIL", "ENTRY_AFTER_CUTOFF",
+                         f"entry committed {at.time()}: engine time after the {limits.entry_cutoff} cutoff even "
+                         f"allowing {self.clock_tol.total_seconds():g}s", severity="P0", index_id=fill.index_id,
+                         at=at, evidence=evidence)
+            elif at.time() > limits.entry_cutoff:
+                self.add(check, "UNVERIFIABLE", "ENTRY_CUTOFF_BOUNDARY",
+                         f"entry committed {at.time()}, within the engine-clock tolerance of the cutoff",
+                         index_id=fill.index_id, at=at, evidence=evidence)
+            else:
+                self.observations[check]["entries_before_cutoff"] += 1
+            # Daily new-entry cap (engine: blocked when entries_today >= max_trades_per_day).
+            today = at.date().isoformat()
+            if today != day:
+                day, count, known = today, 0, True
+                if first_day and baseline.get("trade_day") == today:
+                    count = baseline.get("entries_today")
+                    known = count is not None
+                    count = int(count or 0)
+                first_day = False
+            if not known:
+                self.add(check, "UNVERIFIABLE", "CAP_COUNT_UNKNOWN",
+                         "the day started from a legacy risk row without entries_today", at=at, evidence=evidence)
+            elif count >= limits.max_trades_per_day:
+                self.add(check, "FAIL", "ENTRY_OVER_DAILY_CAP",
+                         f"entry #{count + 1} of {today}; the cap is {limits.max_trades_per_day} new entries",
+                         severity="P0", index_id=fill.index_id, at=at, evidence=evidence)
+            count += 1
+            # Cooldown after the most recent exit (engine: blocked while now < last_exit_at + cooldown).
+            kind, prior = self._last_exit_before(at)
+            if kind == "ambiguous":
+                self.add(check, "UNVERIFIABLE", "COOLDOWN_ORDER_AMBIGUOUS",
+                         f"an exit committed within {GROUP_TOLERANCE.total_seconds():g}s of this entry",
+                         index_id=fill.index_id, at=at, evidence=evidence + [ref("orders", prior.order)])
+            elif kind in ("fill", "baseline"):
+                lo_x, hi_x = self._exit_engine_time(prior) if kind == "fill" else (prior, prior)
+                if at < lo_x + cooldown:
+                    self.add(check, "FAIL", "ENTRY_IN_COOLDOWN",
+                             f"entry committed {at.isoformat()} before the cooldown ended at "
+                             f"{(lo_x + cooldown).isoformat()}", severity="P0", index_id=fill.index_id, at=at,
+                             evidence=evidence)
+                elif earliest < hi_x + cooldown:
+                    self.add(check, "UNVERIFIABLE", "ENTRY_COOLDOWN_BOUNDARY",
+                             f"the cooldown ended at {(hi_x + cooldown).isoformat()}, inside this entry's "
+                             "engine-clock tolerance - the entry's engine time is not persisted",
+                             index_id=fill.index_id, at=at, evidence=evidence)
+                else:
+                    self.observations[check]["entries_clear_of_cooldown"] += 1
+            # No entry while disabled / kill-switched / halted, read from the entry's own risk row.
+            risk = fill.group.member("risk") if fill.group else None
+            if risk is None:
+                self.add(check, "UNVERIFIABLE", "ENTRY_STATE_UNKNOWN", "entry group not reconciled: state unknown",
+                         index_id=fill.index_id, at=at, evidence=evidence)
+                continue
+            active, missing = self._restrictions(risk)
+            evidence.append(ref("risk_state_events", risk))
+            if missing:
+                self.add(check, "UNVERIFIABLE", "ENTRY_STATE_FIELDS_MISSING", f"risk row lacks {missing}",
+                         index_id=fill.index_id, at=at, evidence=evidence)
+            elif active:
+                nearby = self._state_changes_near(at, CONTROL_EVENTS, other_exits_of=fill.index_id)
+                if nearby:
+                    self.add(check, "UNVERIFIABLE", "ENTRY_STATE_CHANGED_IN_CYCLE",
+                             f"{active} recorded, but the state changed during the cycle: {nearby}",
+                             index_id=fill.index_id, at=at, evidence=evidence + nearby)
+                else:
+                    self.add(check, "FAIL", "ENTRY_WHILE_RESTRICTED", f"new entry filled with {active} active",
+                             severity="P0", index_id=fill.index_id, at=at, evidence=evidence)
+            else:
+                nearby = self._state_changes_near(at, UNBLOCKING_EVENTS)
+                if nearby:
+                    self.add(check, "UNVERIFIABLE", "ENTRY_STATE_CHANGED_IN_CYCLE",
+                             f"an unblocking control event landed during the cycle: {nearby}",
+                             index_id=fill.index_id, at=at, evidence=evidence + nearby)
+
+    # -- 8b. R5 consecutive-loss halt
+    def check_halt(self) -> None:
+        check, limit = "HALT", self.limits.max_consecutive_losses
+        baseline = self.x.baseline.get("risk_state")
+        if baseline is None:
+            losses, halt, known = 0, False, True  # no row before the range: a fresh campaign database
+        else:
+            losses, halt = baseline.get("consecutive_losses"), baseline.get("consecutive_loss_halt")
+            known = losses is not None and halt is not None
+            losses, halt = int(losses or 0), bool(halt)
+        effects: dict[int, tuple[str, Any]] = {}
+        for group in self.groups:
+            risk = group.member("risk")
+            if risk is None:
+                continue
+            signal = group.member("signal")
+            placed = group.anchor.get("outcome") == "PLACED"
+            is_exit = placed and signal is not None and signal.get("action") in EXIT_KINDS
+            effects[risk["id"]] = ("exit", group) if is_exit else ("none", group)
+        events = sorted(
+            [("risk", db_time(r["created_at"]), r) for r in self.rows("risk_state_events") if r.get("scope") == "paper"]
+            + [("decision", db_time(d["created_at"]), d) for d in self.rows("paper_decision_events")],
+            key=lambda item: (item[1], item[2]["id"]))
+        trips = 0
+
+        def resync(row: dict[str, Any]) -> tuple[int, bool, bool]:
+            recorded_l, recorded_h = row.get("consecutive_losses"), row.get("consecutive_loss_halt")
+            if recorded_l is None or recorded_h is None:
+                return 0, False, False
+            return int(recorded_l), bool(recorded_h), True
+
+        for kind, at, row in events:
+            evidence = [ref("risk_state_events" if kind == "risk" else "paper_decision_events", row)]
+            tripped_here = False
+            if kind == "risk":
+                event = row.get("event")
+                if event == "CONSECUTIVE_LOSS_HALT_RESET":
+                    losses, halt = 0, False
+                    self.observations[check]["resets"] += 1
+                elif event == "TRADE_RECORDED":
+                    effect = effects.get(row["id"])
+                    if effect is None:
+                        self.add(check, "UNVERIFIABLE", "TRADE_ROW_NOT_RECONCILED",
+                                 "a trade's risk row is not in a reconciled group - streak re-synced from it",
+                                 at=at, evidence=evidence)
+                        losses, halt, known = resync(row)
+                        continue
+                    if effect[0] == "exit":
+                        group = effect[1]
+                        concurrent = [f for f in self.fills if not f.is_entry and f.order["id"] != group.anchor["id"]
+                                      and abs(f.at - group.at) <= GROUP_TOLERANCE]
+                        if concurrent:
+                            self.add(check, "UNVERIFIABLE", "CONCURRENT_EXITS",
+                                     "two exits committed within the grouping tolerance - streak order unknown",
+                                     at=at, evidence=evidence + [ref("orders", f.order) for f in concurrent])
+                            losses, halt, known = resync(row)
+                            continue
+                        pnl = float(group.anchor.get("realized_pnl") or 0.0)
+                        if pnl < 0:
+                            losses += 1
+                            if losses >= limit and not halt:
+                                halt, tripped_here = True, True
+                        elif pnl > 0:
+                            losses = 0
+                elif event not in CONTROL_EVENTS:
+                    self.observations[check][f"other_event:{event}"] += 1
+            recorded_h = row.get("consecutive_loss_halt")
+            recorded_l = row.get("consecutive_losses") if kind == "risk" else losses
+            if recorded_h is None or recorded_l is None:
+                self.add(check, "UNVERIFIABLE", "HALT_FIELDS_MISSING", "row lacks the halt/streak fields", at=at,
+                         evidence=evidence)
+                continue
+            if not known:
+                if kind == "risk":
+                    losses, halt, known = resync(row)
+                continue
+            self.evaluated[check] += 1
+            if halt and not bool(recorded_h):
+                code = "HALT_NOT_TRIPPED" if tripped_here else "HALT_CLEARED_WITHOUT_RESET"
+                self.add(check, "FAIL", code, f"expected the halt set ({losses} consecutive losses, limit {limit}); "
+                         "recorded clear", severity="P0", at=at, evidence=evidence)
+            elif not halt and bool(recorded_h):
+                self.add(check, "FAIL", "HALT_UNEXPECTED", f"halt recorded set with {losses} consecutive losses",
+                         severity="P1", at=at, evidence=evidence)
+            elif int(recorded_l) != losses:
+                self.add(check, "FAIL", "LOSS_STREAK_MISMATCH", f"consecutive_losses {recorded_l} != expected {losses}",
+                         severity="P1", at=at, evidence=evidence)
+            elif tripped_here:
+                trips += 1
+            if kind == "risk":
+                losses, halt, known = resync(row)  # continue from the recorded state after any finding
+            if bool(recorded_h) and kind == "decision" and row.get("event_kind") in ENTRY_KINDS:
+                self.observations[check]["entries_blocked_or_audited_while_halted"] += 1
+        self.observations[check]["halt_trips_verified"] = trips
+        if trips == 0:
+            self.add(check, "UNVERIFIABLE", "HALT_TRIP_NOT_EXERCISED",
+                     f"no {limit}th consecutive loss in range - the trip itself was not exercised")
+
+    # -- 8c. R3 exits are never blocked by entry restrictions
+    def check_exit_rules(self) -> None:
+        check = "EXIT_RULES"
+        for fill in self.fills:
+            if fill.is_entry:
+                continue
+            risk = fill.group.member("risk") if fill.group else None
+            if risk is None:
+                continue
+            active, missing = self._restrictions(risk)
+            if active and not missing:
+                self.evaluated[check] += 1
+                self.observations[check]["exits_filled_while_restricted"] += 1
+        for decision in self.rows("paper_decision_events"):
+            if decision.get("event_kind") not in LEVEL_EXITS or decision.get("decision") != "BLOCKED":
+                continue
+            self.evaluated[check] += 1
+            reason = decision.get("reason") or ""
+            if reason.startswith(RESTRICTION_REASONS):
+                self.add(check, "FAIL", "EXIT_BLOCKED_BY_ENTRY_RESTRICTION",
+                         f"a risk-reducing exit was blocked: {reason!r}", severity="P0",
+                         index_id=decision.get("index_id"), at=db_time(decision["created_at"]),
+                         evidence=[ref("paper_decision_events", decision)])
+            else:
+                self.observations[check][f"exit_blocked:{reason.split(' - ')[0][:40]}"] += 1
+        if not self.observations[check]["exits_filled_while_restricted"]:
+            self.add(check, "UNVERIFIABLE", "EXIT_UNDER_RESTRICTION_NOT_EXERCISED",
+                     "no exit was filled while an entry restriction was active")
+
+    # -- 8d. R4 square-off timing and missed-square-off recovery
+    def check_square_off(self) -> None:
+        check, limits = "SQUARE_OFF", self.limits
+        entry_bar: dict[str, datetime | None] = {}
+        for index_id in self.timeline:
+            snap = self.x.baseline.get(f"account_snapshot:{index_id}")
+            entry_bar[index_id] = db_time(snap.get("last_event_at")) if snap and int(snap["quantity"]) > 0 else None
+        fills_by_index: dict[str, list[Fill]] = defaultdict(list)
+        for fill in self.fills:
+            fills_by_index[fill.index_id].append(fill)
+        for fill in self.fills:
+            evidence = [ref("orders", fill.order)]
+            if fill.is_entry:
+                snap = fill.group.member("snapshot") if fill.group else None
+                entry_bar[fill.index_id] = db_time(snap.get("last_event_at")) if snap else None
+                continue
+            bar = entry_bar.get(fill.index_id)
+            entry_bar[fill.index_id] = None
+            stale = bar is not None and bar.astimezone(IST).date() < fill.at.date()
+            if fill.kind is None:
+                if stale:
+                    self.add(check, "UNVERIFIABLE", "RECOVERY_KIND_UNKNOWN",
+                             "a prior-day position was closed by a fill whose kind is not reconciled",
+                             index_id=fill.index_id, at=fill.at, evidence=evidence)
+                continue
+            if stale and fill.kind != "SQUARE_OFF":
+                self.add(check, "FAIL", "RECOVERY_NOT_FIRST",
+                         f"a position from {bar.date()} was closed by {fill.kind}, not the missed-square-off "
+                         "recovery", severity="P1", index_id=fill.index_id, at=fill.at, evidence=evidence)
+            if fill.kind != "SQUARE_OFF":
+                continue
+            self.evaluated[check] += 1
+            if bar is None:
+                self.add(check, "UNVERIFIABLE", "SQUARE_OFF_ENTRY_UNKNOWN", "the closed position's entry bar is unknown",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence)
+                continue
+            earliest = fill.at - self.clock_tol
+            if stale:  # missed-square-off recovery: any in-session cycle, before anything else that day
+                self.observations[check]["recoveries"] += 1
+                earlier_today = [f for f in fills_by_index[fill.index_id]
+                                 if f.at.date() == fill.at.date() and f.at < fill.at]
+                if earlier_today:
+                    self.add(check, "FAIL", "RECOVERY_NOT_FIRST", "another fill of this index preceded the recovery",
+                             severity="P1", index_id=fill.index_id, at=fill.at,
+                             evidence=evidence + [ref("orders", f.order) for f in earlier_today])
+                window_start, window_name = limits.trading_start, "session open"
+            else:
+                self.observations[check]["same_day_square_offs"] += 1
+                window_start, window_name = limits.square_off_time, "square-off time"
+                snap = fill.group.member("snapshot") if fill.group else None
+                if snap is None:
+                    self.add(check, "UNVERIFIABLE", "SQUARE_OFF_SNAPSHOT_MISSING", "no account snapshot for the fill",
+                             index_id=fill.index_id, at=fill.at, evidence=evidence)
+                elif snap.get("square_off_date") != fill.at.date().isoformat():
+                    self.add(check, "FAIL", "SQUARE_OFF_DATE_NOT_RECORDED",
+                             f"square_off_date {snap.get('square_off_date')!r} != {fill.at.date()}", severity="P1",
+                             index_id=fill.index_id, at=fill.at,
+                             evidence=evidence + [ref("auto_trade_account_snapshots", snap)])
+            if fill.at.time() < window_start:
+                self.add(check, "FAIL", "SQUARE_OFF_TOO_EARLY", f"forced close committed {fill.at.time()} before the "
+                         f"{window_name} {window_start}", severity="P1", index_id=fill.index_id, at=fill.at,
+                         evidence=evidence)
+            elif earliest.date() == fill.at.date() and earliest.time() > limits.trading_end:
+                self.add(check, "FAIL", "SQUARE_OFF_AFTER_SESSION", f"forced close committed {fill.at.time()}, after "
+                         f"{limits.trading_end} even allowing the engine-clock tolerance", severity="P1",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence)
+            elif fill.at.time() > limits.trading_end:
+                self.add(check, "UNVERIFIABLE", "SQUARE_OFF_SESSION_BOUNDARY",
+                         "forced close within the engine-clock tolerance of the session end",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence)
+            if not stale:
+                first_tick_by = datetime.combine(fill.at.date(), limits.square_off_time, tzinfo=IST) \
+                    + SCHEDULER_TICK + self.clock_tol
+                if fill.at > first_tick_by:
+                    self.add(check, "UNRECONCILED", "SQUARE_OFF_NOT_FIRST_TICK",
+                             f"forced close committed {fill.at.time()}, later than the first scheduler tick after "
+                             f"{limits.square_off_time} could commit ({first_tick_by.time()}): review logs/alerts for "
+                             "failed or missing cycles", index_id=fill.index_id, at=fill.at, evidence=evidence)
+        self._check_missed_square_offs()
+        if not self.evaluated[check]:
+            self.add(check, "UNVERIFIABLE", "SQUARE_OFF_NOT_EXERCISED", "no forced close in range")
+
+    def _check_missed_square_offs(self) -> None:
+        check, limits = "SQUARE_OFF", self.limits
+        span = self.x.manifest.get("range") or {}
+        start, end = db_time(span.get("start")), db_time(span.get("end"))
+        if start is None or end is None:
+            self.add(check, "UNVERIFIABLE", "RANGE_UNKNOWN", "extraction range unknown: missed square-offs not checked")
+            return
+        restarts = sorted(db_time(a["created_at"]) for a in self.rows("alert_events")
+                          if a.get("category") == "SYSTEM_RESTART")
+        for index_id, points in self.timeline.items():
+            intervals, opened = [], None
+            for moment, qty, _side in points:
+                if qty > 0 and opened is None:
+                    opened = moment
+                elif qty == 0 and opened is not None:
+                    intervals.append((opened, moment))
+                    opened = None
+            if opened is not None:
+                intervals.append((opened, None))
+            for opened, closed in intervals:
+                day = max(opened, start).date()
+                last_day = (closed or end).date()
+                while day <= last_day:
+                    cutoff = datetime.combine(day, limits.square_off_time, tzinfo=IST)
+                    deadline = datetime.combine(day, limits.trading_end, tzinfo=IST) + self.clock_tol
+                    if (day.weekday() < 5 and opened < cutoff and start <= cutoff and end >= deadline
+                            and (closed is None or closed > deadline)):
+                        outage = [r for r in restarts if cutoff < r <= (closed or end)]
+                        if outage:
+                            self.observations[check]["missed_during_outage"] += 1
+                            if closed is None:
+                                self.add(check, "UNVERIFIABLE", "RECOVERY_NOT_IN_RANGE",
+                                         f"square-off of {day} missed across a restart; no recovery fill in range",
+                                         index_id=index_id, at=deadline)
+                        else:
+                            self.add(check, "FAIL", "SQUARE_OFF_MISSED",
+                                     f"position still open after {limits.trading_end} on {day} with no restart "
+                                     "in between", severity="P1", index_id=index_id, at=deadline)
+                        break  # the first missed day per position; recovery is checked on the closing fill
+                    day += timedelta(days=1)
+
+    # -- 8e. blocked decisions agree with their recorded state
+    def check_decision_state(self) -> None:
+        check, limits = "DECISION_STATE", self.limits
+        cooldown = timedelta(minutes=limits.cooldown_minutes)
+        for decision in self.rows("paper_decision_events"):
+            if decision.get("decision") != "BLOCKED":
+                continue
+            reason = decision.get("reason") or ""
+            at = db_time(decision["created_at"])
+            evidence = [ref("paper_decision_events", decision)]
+            index_id = decision.get("index_id")
+
+            def need(field_name: str, predicate, description: str) -> None:
+                value = decision.get(field_name)
+                if value is None:
+                    self.add(check, "UNVERIFIABLE", "DECISION_FIELD_MISSING", f"{field_name} missing for {reason!r}",
+                             index_id=index_id, at=at, evidence=evidence)
+                elif not predicate(value):
+                    self.add(check, "FAIL", "DECISION_STATE_MISMATCH",
+                             f"blocked for {reason!r} but {field_name}={value!r} ({description})", severity="P1",
+                             index_id=index_id, at=at, evidence=evidence)
+                else:
+                    self.evaluated[check] += 1
+
+            if reason.startswith("Emergency kill switch is engaged"):
+                need("kill_switch", bool, "the kill switch was not engaged")
+            elif reason.startswith("Trading halted after"):
+                need("consecutive_loss_halt", bool, "the halt was not set")
+            elif reason == "Auto trading is disabled":
+                need("auto_trading_enabled", lambda v: not bool(v), "auto trading was enabled")
+            elif reason == "Max trades per day reached":
+                need("entries_today", lambda v: int(v) >= limits.max_trades_per_day, "under the daily cap")
+            elif reason == "Daily loss limit reached":
+                need("realized_pnl_today", lambda v: float(v) <= -abs(limits.daily_loss_limit), "above the loss limit")
+            elif reason.startswith("Past entry cutoff"):
+                self._timed_decision(check, at.time() > limits.entry_cutoff, "decision committed before the cutoff",
+                                     index_id, at, evidence)
+            elif reason == "Outside configured trading hours":
+                earliest = at - self.clock_tol
+                inside = at.time() <= limits.trading_end and earliest.date() == at.date() \
+                    and earliest.time() >= limits.trading_start
+                self._timed_decision(check, not inside, "engine time was certainly inside trading hours",
+                                     index_id, at, evidence)
+            elif reason.startswith("Cooldown active until "):
+                self._cooldown_decision(check, reason, cooldown, index_id, at, evidence)
+            else:
+                self.observations[check][f"other:{reason.split(' (')[0][:40]}"] += 1
+
+    def _timed_decision(self, check: str, consistent: bool, why: str, index_id: str | None, at: datetime,
+                        evidence: list[str]) -> None:
+        self.evaluated[check] += 1
+        if not consistent:
+            self.add(check, "FAIL", "DECISION_TIME_MISMATCH", why, severity="P1", index_id=index_id, at=at,
+                     evidence=evidence)
+
+    def _cooldown_decision(self, check: str, reason: str, cooldown: timedelta, index_id: str | None, at: datetime,
+                           evidence: list[str]) -> None:
+        until_text = reason.removeprefix("Cooldown active until ").strip()
+        kind, prior = self._last_exit_before(at)
+        exact = None
+        if kind == "fill":
+            lo_x, hi_x = self._exit_engine_time(prior)
+            exact = lo_x if lo_x == hi_x else None
+            evidence = evidence + [ref("orders", prior.order)]
+        elif kind == "baseline":
+            exact = prior
+        if exact is None:
+            self.add(check, "UNVERIFIABLE", "COOLDOWN_SOURCE_UNKNOWN",
+                     f"the last exit's engine time is not known ({kind})", index_id=index_id, at=at, evidence=evidence)
+            return
+        expected = (exact + cooldown).astimezone(IST).time().isoformat()
+        self.evaluated[check] += 1
+        if until_text != expected:
+            self.add(check, "FAIL", "COOLDOWN_UNTIL_MISMATCH",
+                     f"blocked until {until_text}, but last exit {exact.isoformat()} + {cooldown} = {expected}",
+                     severity="P1", index_id=index_id, at=at, evidence=evidence)
+        elif at - self.clock_tol >= exact + cooldown:
+            self.add(check, "FAIL", "DECISION_TIME_MISMATCH", "decision's engine time was certainly after the cooldown",
+                     severity="P1", index_id=index_id, at=at, evidence=evidence)
+
+    # -- 8f. D1 exits at the exact SL/target level
+    def check_exit_levels(self) -> None:
+        check = "D1_EXIT_LEVEL"
+        max_age = BAR_LENGTH * SIGNAL_FRESHNESS_BARS
+        restarts = sorted(db_time(a["created_at"]) for a in self.rows("alert_events")
+                          if a.get("category") == "SYSTEM_RESTART")
+        last_entry: dict[str, Fill | None] = defaultdict(lambda: None)
+        for fill in self.fills:
+            if fill.is_entry:
+                last_entry[fill.index_id] = fill
+                continue
+            entry, last_entry[fill.index_id] = last_entry[fill.index_id], None
+            if fill.kind not in LEVEL_EXITS:
+                continue
+            evidence = [ref("orders", fill.order)]
+            if self.captures is None:
+                self.add(check, "UNVERIFIABLE", "SL_TP_NOT_RECONSTRUCTIBLE",
+                         "SL/target levels are not persisted and there is no bar evidence to rebuild them; "
+                         "only the supporting bar-range check (BARS) applies", index_id=fill.index_id, at=fill.at,
+                         evidence=evidence)
+                continue
+            if entry is None:
+                self.add(check, "UNVERIFIABLE", "ENTRY_OUTSIDE_RANGE", "the position's entry fill is not in range",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence)
+                continue
+            chosen = self.replayed.get(entry.order["id"])
+            if chosen is None:
+                self.add(check, "UNVERIFIABLE", "ENTRY_REPLAY_NOT_MATCHED",
+                         "the entry's canonical replay did not match, so its levels cannot be rebuilt",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence + [ref("orders", entry.order)])
+                continue
+            snap = fill.group.member("snapshot") if fill.group else None
+            bar_at = db_time(snap.get("last_event_at")) if snap else None
+            if bar_at is not None and fill.at - (bar_at + BAR_LENGTH) > max_age:
+                self.add(check, "UNVERIFIABLE", "LATE_EXIT",
+                         "a late exit fills at the current price by design - no level to verify",
+                         index_id=fill.index_id, at=fill.at, evidence=evidence)
+                continue
+            level = chosen.stop_loss if fill.kind == "EXIT_SL" else chosen.target
+            price = float(fill.order["price"])
+            if _same(level, price):
+                self.evaluated[check] += 1
+                continue
+            restarted = any(entry.at < r < fill.at for r in restarts)
+            self.add(check, "UNRECONCILED", "EXIT_NOT_AT_RECONSTRUCTED_LEVEL",
+                     f"{fill.kind} filled at {price}, reconstructed level {level} (entry {entry.order['price']} at "
+                     f"{chosen.timestamp.isoformat()})" + (" - levels re-derived after a restart" if restarted else ""),
+                     index_id=fill.index_id, at=fill.at, evidence=evidence + [ref("orders", entry.order)])
+
     # -- run
     def run(self) -> dict[str, Any]:
         self.check_live_orders()
@@ -747,6 +1300,12 @@ class Reconciler:
         self.check_bars()
         self.check_replay()
         self.check_dashboard()
+        self.check_entry_rules()
+        self.check_halt()
+        self.check_exit_rules()
+        self.check_square_off()
+        self.check_decision_state()
+        self.check_exit_levels()
         return self.report()
 
     def report(self) -> dict[str, Any]:
@@ -763,7 +1322,8 @@ class Reconciler:
             else:
                 status = "PASS"
             checks[check] = {"status": status, "evaluated": self.evaluated.get(check, 0),
-                             "findings": len(items)}
+                             "findings": len(items), "criteria": PROTOCOL_CRITERIA[check],
+                             "observations": dict(sorted(self.observations[check].items()))}
         p0 = [f for f in self.findings if f.status == "FAIL" and f.severity == "P0"]
         return {
             "schema": SCHEMA,
@@ -771,6 +1331,7 @@ class Reconciler:
                        "bars": self.captures is not None, "status_samples": None if self.samples is None
                        else len(self.samples)},
             "parameters": {"group_tolerance_seconds": GROUP_TOLERANCE.total_seconds(),
+                           "engine_clock_tolerance_seconds": self.clock_tol.total_seconds(),
                            "max_open_positions": self.max_open,
                            "status_lag_seconds": self.status_lag.total_seconds()},
             "checks": checks,

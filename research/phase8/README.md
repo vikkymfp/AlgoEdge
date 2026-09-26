@@ -14,7 +14,7 @@ none can change a risk setting.
 | `collector` | GET `/api/auto-trading/status`, GET `/api/alerts` | `status_*.jsonl` | 3.8, UI1–UI3, R1 |
 | `bars` | yfinance via the engine's own `fetch_underlying_data` | `bars_*.jsonl` | D1–D4, A1, A4 |
 | `extract` | SQL Server, SELECT only, bound parameters | `extract_*/` | 3.7 |
-| `reconcile` | an extract directory plus optional bars/status evidence | `reconcile_*.jsonl` | R1, R2, C2, P1, A1, D1/D2/D4, S1, UI1–UI3 |
+| `reconcile` | an extract directory plus optional bars/status evidence | `reconcile_*.jsonl` | R1–R5, C2, P1, A1, D1–D4, S1, UI1–UI3 |
 | `drill` | POST `/api/auto-trading/run/{index}?interval=5m&quantity=1` **only** | `drill_*.jsonl` | drills C and D |
 
 ## Read-only guarantees
@@ -64,6 +64,30 @@ no index column, so its rows match on time alone.
   evidence). A check with nothing to evaluate is UNVERIFIABLE, never PASS.
 - **Any P0 FAIL** sets `stop_campaign`.
 
+Risk-rule checks, with the protocol criteria they serve (each report entry
+lists its `criteria` and `observations`):
+
+| Check | What it verifies |
+|---|---|
+| `ENTRY_RULES` (R5, R1) | Every PLACED entry: session open and 15:00 cutoff, cooldown after the last exit's engine time, the 10-entry daily cap (baseline included), and no entry while disabled, kill-switched or halted (read from the entry's own risk row) |
+| `HALT` (R5) | The loss streak and halt, replayed against every risk and decision row: trips at 3, a win keeps the halt, only `CONSECUTIVE_LOSS_HALT_RESET` clears it, and it survives restarts |
+| `EXIT_RULES` (R3) | No SL/target exit decision is BLOCKED by kill switch, disabled or halt; exits filled while a restriction is recorded are counted |
+| `SQUARE_OFF` (R4) | Forced close between 15:20 and 15:30 with `square_off_date` recorded; later than the first scheduler tick is UNRECONCILED; missed square-offs; next-session recovery first and in session |
+| `DECISION_STATE` (R3, R5) | Each BLOCKED reason agrees with its recorded state (kill switch, halt, disabled, cap, loss limit, cutoff/hours time, exact cooldown boundary) |
+| `D1_EXIT_LEVEL` (D1) | An SL/target exit equals the level rebuilt from its entry's canonical replay on captured bars |
+
+**Engine clock.** A cycle takes its engine time when it starts and commits
+its rows at the end. Exits persist that time (`last_exit_at`); entries don't.
+So entry time rules assume a cycle finishes within `ENGINE_CLOCK_TOLERANCE`
+(120 s). A rule is FAIL only if violated for every engine time in
+`[created_at − 120 s, created_at]`, PASS only if it holds for all of them,
+and UNVERIFIABLE otherwise. Entries at the next scheduler tick after an exit
+usually land inside that band for the cooldown.
+
+**Exercise.** A behaviour that never occurred in range (halt trip, exit under a
+restriction, forced close, exact exit level without bars) is UNVERIFIABLE,
+never PASS. Criterion verdicts come from reconciling the whole campaign range.
+
 `tests/test_end_to_end.py` runs the real engine cycle path into a real database,
 extracts it and reconciles it, which proves the rule on rows the engine actually
 writes.
@@ -83,8 +107,12 @@ writes.
    recorded, and a price not found in the evidence is UNRECONCILED, not FAIL.
 3. **Grouping resolution is 1 s.** Two cycles of one index, or an entry and
    another index's exit, within 1 s of each other are UNRECONCILED by design.
-4. **S1 replay covers entries.** SL/target exits are checked against the bar's
-   range; square-off prices against captured closes (else UNVERIFIABLE).
+4. **SL/target levels are not persisted.** An exact level check
+   (`D1_EXIT_LEVEL`) needs bar evidence to rebuild them from the entry's
+   canonical replay (the engine's own restart formula). Without bars, or for a
+   late exit, it is UNVERIFIABLE. The bar-range check under `BARS` is
+   supporting evidence only. Square-off prices are checked against captured
+   closes (else UNVERIFIABLE).
 5. **R-6 (database outage) is not reconciled automatically.** A fill that
    happened in memory but was never committed is lost at restart (existing B6
    behaviour). The reviewer applies the protocol's R-6 expectation to the
@@ -94,6 +122,10 @@ writes.
    covered by the frozen test suites, not by live evidence.
 7. **P&L is in underlying index points**, not option premium; there are no
    costs.
+8. **"First cycle" and the cooldown boundary.** Idle cycles leave no rows, so
+   a square-off is proven only against the 15:20–15:30 window and the first
+   scheduler tick. An entry right after a cooldown ends is usually
+   UNVERIFIABLE, because its engine time isn't persisted.
 
 ## Tests
 
