@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any
@@ -79,6 +80,8 @@ def run_cycle(
     now: datetime | None = None,
     total_open_positions: int | None = None,
     resolve_contract_fn: Callable[[TradeEvent], OptionContract | None] | None = None,
+    open_positions_fn: Callable[[], int] | None = None,
+    entry_guard: AbstractContextManager | None = None,
 ) -> AutoTradeCycleResult:
     """One full pass of Auto Trading's paper flow, using the exact same
     signal engine as Backtest and `fno_signals --live`:
@@ -150,6 +153,16 @@ def run_cycle(
     Invalid OHLC bars (see fno_signals.strategy.drop_invalid_bars) are
     dropped before anything reads a price, so a NaN bar can never become
     a fill price.
+
+    Global max_open_positions for NEW entries: a caller running several
+    indices concurrently passes `entry_guard` (a lock shared by all of them)
+    and `open_positions_fn` (the live global count). A new entry's risk check,
+    fill and trade/entry recording then run inside that guard with the open
+    positions counted afresh, so two indices can never both pass the check on
+    a count read before either filled. The guard is taken only after the
+    candle fetch and contract resolution, never for exits, square-off or
+    missed-square-off recovery, and holds no I/O. Without them,
+    `total_open_positions` (a count read by the caller) is used, as before.
     """
     if index_id not in _INDEX_CHOICE:
         raise ValueError(f"Unsupported index_id for Auto Trade: {index_id}")
@@ -322,39 +335,46 @@ def run_cycle(
     # driven by event.kind directly, not this simplification.
     action = "BUY" if event.kind in _ENTRY_KINDS else "SELL"
     order_value = quantity * event.underlying_price
-    # An exit only closes the position this account already holds, so the
-    # kill switch / auto-trading-disabled gates (which stop NEW risk) must
-    # not block it - see RiskManager.check(risk_reducing=...).
-    decision = risk_manager.check(
-        action, quantity, open_positions, now=now, order_value=order_value, risk_reducing=action == "SELL",
-        cap_new_entries=True,  # paper's max_trades_per_day counts new entries only
-    )
-    if not decision.allowed:
-        return AutoTradeCycleResult(event, decision, None)
+    is_new_entry = event.kind in _ENTRY_KINDS
+    # Check-and-fill of a NEW entry is atomic across indices (see the
+    # docstring): the global open-position count is re-read inside the
+    # guard, immediately before the fill.
+    with entry_guard if is_new_entry and entry_guard is not None else nullcontext():
+        if is_new_entry and open_positions_fn is not None:
+            open_positions = open_positions_fn()
+        # An exit only closes the position this account already holds, so the
+        # kill switch / auto-trading-disabled gates (which stop NEW risk) must
+        # not block it - see RiskManager.check(risk_reducing=...).
+        decision = risk_manager.check(
+            action, quantity, open_positions, now=now, order_value=order_value, risk_reducing=action == "SELL",
+            cap_new_entries=True,  # paper's max_trades_per_day counts new entries only
+        )
+        if not decision.allowed:
+            return AutoTradeCycleResult(event, decision, None)
 
-    if event.kind in _EXIT_KINDS:
-        fill_price = current_price if late_exit else float(event.exit_level)
-        if late_exit:
-            decision = RiskDecision(True, "Late exit - signal past its freshness window, filled at current price")
-    else:
-        fill_price = event.underlying_price
-    order_result = order_manager.place_event(
-        event.kind, fill_price, quantity, index_id=index_id, contract=contract
-    )
-    if order_result.status == "PLACED":
-        is_exit = event.kind in _EXIT_KINDS
-        if not is_exit:
-            # The canonical levels this position will exit on (see
-            # _account_synced_events); cleared by fill_event() when flat.
-            account.stop_loss, account.target = event.stop_loss, event.target
-        risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
-        if not is_exit:
-            risk_manager.record_entry(now=now)  # the paper entry cap's counter
-        # Deliberately only advanced on a successful fill, not merely on
-        # having "seen" the event - a signal blocked by a risk gate this
-        # cycle (e.g. auto trading briefly disabled) must still be
-        # eligible to fire on a later cycle once the gate reopens.
-        account.last_event_at = event.timestamp
+        if event.kind in _EXIT_KINDS:
+            fill_price = current_price if late_exit else float(event.exit_level)
+            if late_exit:
+                decision = RiskDecision(True, "Late exit - signal past its freshness window, filled at current price")
+        else:
+            fill_price = event.underlying_price
+        order_result = order_manager.place_event(
+            event.kind, fill_price, quantity, index_id=index_id, contract=contract
+        )
+        if order_result.status == "PLACED":
+            is_exit = event.kind in _EXIT_KINDS
+            if not is_exit:
+                # The canonical levels this position will exit on (see
+                # _account_synced_events); cleared by fill_event() when flat.
+                account.stop_loss, account.target = event.stop_loss, event.target
+            risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=is_exit)
+            if not is_exit:
+                risk_manager.record_entry(now=now)  # the paper entry cap's counter
+            # Deliberately only advanced on a successful fill, not merely on
+            # having "seen" the event - a signal blocked by a risk gate this
+            # cycle (e.g. auto trading briefly disabled) must still be
+            # eligible to fire on a later cycle once the gate reopens.
+            account.last_event_at = event.timestamp
     return AutoTradeCycleResult(event, decision, order_result)
 
 

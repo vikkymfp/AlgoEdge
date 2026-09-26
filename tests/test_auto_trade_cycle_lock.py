@@ -165,10 +165,16 @@ def test_two_manual_cycles_for_the_same_index_process_the_event_once(dashboard) 
 
 def test_without_the_lock_the_same_race_double_fills(dashboard, monkeypatch) -> None:
     # Proves the tests above exercise a real race: with the per-index lock
-    # bypassed, the second cycle evaluates before the first advanced the
-    # high-water mark, and the event is filled twice.
+    # bypassed - and the global entry guard with its in-guard re-count
+    # disabled too, since it independently stops a duplicate entry (see
+    # tests/test_paper_entry_concurrency.py) - the second cycle evaluates
+    # before the first advanced the high-water mark, and the event is filled
+    # twice.
     _risk_manager, accounts, _locks, gate = dashboard
     monkeypatch.setattr(web_server, "_run_and_persist_cycle", web_server._execute_and_persist_cycle)
+    real_run_cycle = web_server.run_cycle
+    monkeypatch.setattr(web_server, "run_cycle", lambda *a, open_positions_fn=None, entry_guard=None, **k:
+                        real_run_cycle(*a, **k))
     gate["hold"] = "nifty-50"
     results: dict = {}
 

@@ -405,6 +405,16 @@ _CYCLE_LOCK_TIMEOUT_SECONDS = 30.0
 _cycle_locks: dict[str, threading.Lock] = {index_id: threading.Lock() for index_id in INDEX_DEFINITIONS}
 
 
+# Global max_open_positions for NEW paper entries across indices: the B5
+# locks above are per index, so two indices' cycles can run at once. Each
+# cycle takes this guard only around its new entry's risk check and fill,
+# with the global open-position count re-read inside it (see
+# auto_trader.run_cycle's entry_guard/open_positions_fn). Always acquired
+# while already holding a per-index lock, never the other way round, and it
+# holds no I/O or database work - no lock-order cycle is possible.
+_entry_guard = threading.Lock()
+
+
 class CycleBusyError(RuntimeError):
     """Another paper cycle for the same index held its lock past the timeout."""
 
@@ -507,6 +517,8 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
         index_id, interval, risk_manager, order_manager, quantity=quantity,
         total_open_positions=_total_open_positions(),
         resolve_contract_fn=lambda event: _resolve_auto_trade_contract(index_id, event),
+        open_positions_fn=_total_open_positions,
+        entry_guard=_entry_guard,
     )
     if not result.risk.allowed and result.risk.reason == "Daily loss limit reached":
         alerts.raise_alert(
