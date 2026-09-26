@@ -32,10 +32,20 @@ class RedactingFilter(logging.Filter):
 
 
 def configure_logging(log_dir: Path, *, run_id: str | None = None) -> Path:
-    """Root logger at INFO to a new (never overwritten) file plus stderr."""
+    """Root logger at INFO to a new (never overwritten) file plus stderr.
+
+    The file is claimed exactly once, with exclusive create: an existing
+    file is an error, never reused. The handler itself then appends to that
+    file. uvicorn.run() applies its own logging.config.dictConfig(), which
+    closes every existing handler (logging.shutdown) while leaving it
+    attached to the root logger; the next record makes FileHandler reopen
+    its stream in the handler's mode. With mode "x" that reopen raised
+    FileExistsError at the startup SYSTEM_RESTART alert; with "a" it
+    continues the same file."""
     log_dir.mkdir(parents=True, exist_ok=True)
     path = log_dir / f"server_{utc_now().astimezone(IST):%Y%m%dT%H%M%S%z}_{run_id or new_run_id()}.log"
-    file_handler = logging.FileHandler(path, mode="x", encoding="utf-8")
+    path.open("x", encoding="utf-8").close()  # claim a new file; FileExistsError if it already exists
+    file_handler = logging.FileHandler(path, mode="a", encoding="utf-8")
     stream_handler = logging.StreamHandler()
     formatter = logging.Formatter(FORMAT)
     formatter.default_msec_format = "%s.%03d"
