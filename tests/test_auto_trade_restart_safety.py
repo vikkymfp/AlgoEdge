@@ -24,7 +24,7 @@ from algoedge.order_manager import OrderManager, SimulatedAccount
 from algoedge.risk_manager import IST, RiskManager
 from fno_signals.strategy import TradeEvent
 
-TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 0, tzinfo=IST)
+TRADING_HOURS_NOW = datetime(2026, 9, 23, 10, 40, tzinfo=IST)  # the 10:35 entry bar has just closed (B8)
 
 
 def trending_df(n: int, start_price: float, step: float, start: str = "2026-09-23 09:15") -> pd.DataFrame:

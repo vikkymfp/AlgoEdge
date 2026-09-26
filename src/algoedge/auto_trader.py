@@ -227,14 +227,30 @@ def run_cycle(
     # with nothing to close) is expired - marked processed, never filled -
     # and the strategy is re-evaluated from that point, so a genuine later
     # signal the expired one was masking is still found in the same cycle.
+    #
+    # Completed candles for new entries: a flat account evaluates the strategy
+    # without the still-forming last candle (bar start + bar length > now), so a new entry
+    # comes from a candle's final OHLC and fills at its close - the Backtest/
+    # Pine bar-close model - never from the still-forming candle yfinance
+    # includes during market hours. A completed bar's age is >= 0 at its close,
+    # so it is fresh immediately and for SIGNAL_FRESHNESS_BARS after. An
+    # account holding a position still evaluates the full window, forming
+    # candle included: seeded with its position the strategy can only produce
+    # that position's SL/target exit, whose timing is unchanged. Square-off,
+    # missed-square-off recovery and late exits keep using the latest price
+    # (current_price above).
     bar_length = _BAR_LENGTH[interval]
     max_age = bar_length * SIGNAL_FRESHNESS_BARS
+    completed = _completed_bars(data, bar_length, now)
     event: TradeEvent | None = None
     last_expired: TradeEvent | None = None
     late_exit = False
     expired = 0
     for _ in range(len(data) + 1):  # each pass either returns an event or expires one
-        events = _account_synced_events(data, strategy_config, index_config.name, account)
+        window = data if account.quantity > 0 else completed
+        events = (
+            _account_synced_events(window, strategy_config, index_config.name, account) if len(window) else []
+        )
         unprocessed = (
             events if account.last_event_at is None
             else [e for e in events if e.timestamp > account.last_event_at]
@@ -382,6 +398,16 @@ def _stale_position_day(account: SimulatedAccount, now: datetime) -> Any:
         return None
     entry_day = _as_ist(account.last_event_at).tz_convert(IST).date()  # the IST date, whatever the stored zone
     return entry_day if entry_day < now.date() else None
+
+
+def _completed_bars(data: pd.DataFrame, bar_length: timedelta, now: datetime) -> pd.DataFrame:
+    """`data` without its last bar when that bar is still forming - its start
+    (the index, the yfinance convention) + bar length is after `now`. A
+    fetched history never holds bars after `now`, so only the last one can
+    be incomplete. Never alters a bar."""
+    if len(data) and _as_ist(data.index[-1]) + bar_length > now:
+        return data.iloc[:-1]
+    return data
 
 
 def _account_synced_events(

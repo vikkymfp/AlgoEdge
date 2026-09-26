@@ -255,11 +255,14 @@ def test_freshness_window_is_two_bar_lengths_after_bar_close() -> None:
     assert auto_trader._BAR_LENGTH["5m"] == timedelta(minutes=5)
 
 
-def test_a_signal_on_the_still_forming_bar_counts_as_fresh(monkeypatch) -> None:
-    # now is before the entry bar even closes (yfinance includes the forming bar).
+def test_a_signal_on_the_still_forming_bar_is_not_acted_on(monkeypatch) -> None:
+    # Phase 7 B8: now is before the entry bar closes (yfinance includes the
+    # forming bar) - a new entry waits for the completed candle.
     order_manager = OrderManager()
     result = run_cycle(monkeypatch, UPTREND.iloc[:17], enabled(), order_manager, now=at(10, 37))
-    assert result.order.status == "PLACED"
+    assert result.order is None and order_manager.account.quantity == 0
+    result = run_cycle(monkeypatch, UPTREND.iloc[:17], enabled(), order_manager, now=at(10, 40))
+    assert result.event.kind == "ENTRY_CALL" and result.order.status == "PLACED"
 
 
 def test_a_stale_backlog_is_expired_in_one_cycle_and_the_fresh_event_acted_on(monkeypatch) -> None:
