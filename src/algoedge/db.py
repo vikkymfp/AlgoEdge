@@ -397,6 +397,96 @@ def record_auto_trade_account_snapshot(index_id: str, account: Any, *, event: st
         ))
 
 
+# Outcome of record_paper_cycle(). DISABLED is the existing "persistence
+# not configured" mode (never a failure); FAILED means nothing was written.
+PERSIST_OK = "OK"
+PERSIST_DISABLED = "DISABLED"
+PERSIST_FAILED = "FAILED"
+
+
+def record_paper_cycle(
+    *,
+    signal: dict[str, Any],
+    order: dict[str, Any] | None = None,
+    risk_manager: Any = None,
+    risk_event: str = "TRADE_RECORDED",
+    account_snapshot: tuple[str, Any, str] | None = None,
+) -> str:
+    """Persists everything one paper Auto Trade cycle produced - the signal,
+    and for an order its OrderRecord, the post-fill risk snapshot and (for a
+    PLACED fill) the account snapshot `(index_id, account, event)` - in ONE
+    transaction: either every row is committed or none is.
+
+    Unlike the per-record writers (record_signal/record_order/
+    record_risk_snapshot/record_auto_trade_account_snapshot, still used as-is
+    by the live fno_signals CLI and manual trading), a failure is not
+    swallowed: it rolls the whole cycle back, is logged as DATABASE_FAILURE
+    and returns PERSIST_FAILED so the caller can surface it. It never raises.
+    Rows are built before the session opens, so a bad value cannot leave a
+    half-written transaction either. The in-memory paper fill itself is
+    never touched here."""
+    if _session_factory is None:
+        return PERSIST_DISABLED
+    try:
+        rows: list[Any] = [StrategySignal(**signal)]
+        if order is not None:
+            rows.append(OrderRecord(**order))
+        if risk_manager is not None:
+            rows.append(_risk_state_row(risk_manager, risk_event, scope="paper"))
+        if account_snapshot is not None:
+            rows.append(_account_snapshot_row(*account_snapshot))
+    except (AttributeError, TypeError, ValueError) as error:
+        logger.error("DATABASE_FAILURE: paper cycle not persisted (invalid record): %s", error)
+        return PERSIST_FAILED
+    session: Session | None = None
+    try:
+        session = _session_factory()
+        session.add_all(rows)
+        session.commit()
+        return PERSIST_OK
+    except SQLAlchemyError as error:
+        if session is not None:
+            session.rollback()
+        logger.error("DATABASE_FAILURE: paper cycle not persisted, whole transaction rolled back: %s", error)
+        return PERSIST_FAILED
+    finally:
+        if session is not None:
+            session.close()
+
+
+def _risk_state_row(risk_manager: Any, event: str, *, scope: str) -> RiskStateEvent:
+    """Same fields as record_risk_snapshot() writes."""
+    state = risk_manager.state
+    return RiskStateEvent(
+        event=event, scope=scope,
+        auto_trading_enabled=state.auto_trading_enabled,
+        kill_switch=state.kill_switch,
+        kill_switch_reason=state.kill_switch_reason,
+        trades_today=state.trades_today,
+        realized_pnl_today=state.realized_pnl_today,
+        trade_day=state.trade_day,
+        consecutive_losses=state.consecutive_losses,
+        consecutive_loss_halt=state.consecutive_loss_halt,
+        last_exit_at=state.last_exit_at,
+    )
+
+
+def _account_snapshot_row(index_id: str, account: Any, event: str) -> AutoTradeAccountSnapshot:
+    """Same fields as record_auto_trade_account_snapshot() writes."""
+    contract = account.contract
+    return AutoTradeAccountSnapshot(
+        index_id=index_id, event=event, cash=account.cash, quantity=account.quantity,
+        average_price=account.average_price, side=account.side,
+        last_event_at=account.last_event_at, square_off_date=account.square_off_date,
+        contract_trading_symbol=contract.trading_symbol if contract else None,
+        contract_underlying=contract.underlying if contract else None,
+        contract_right=contract.right if contract else None,
+        contract_strike=contract.strike if contract else None,
+        contract_expiry=contract.expiry if contract else None,
+        contract_instrument_id=contract.instrument_id if contract else None,
+    )
+
+
 def load_latest_auto_trade_account_state(index_id: str) -> dict[str, Any] | None:
     """Returns the most recent paper Auto Trade account snapshot for this
     index as a plain dict (safe to use after the session closes), or None

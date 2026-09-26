@@ -370,7 +370,9 @@ def test_persisted_order_records_the_actual_fill_price(monkeypatch) -> None:
     from algoedge import web_server
 
     recorded = []
-    monkeypatch.setattr(web_server.db, "record_order", lambda **kw: recorded.append(kw))
+    # The paper cycle persists its order through the atomic
+    # db.record_paper_cycle() (Phase 7 B6); capture the order row it writes.
+    monkeypatch.setattr(web_server.db, "record_paper_cycle", lambda **kw: recorded.append(kw["order"]) or "OK")
     monkeypatch.setattr(web_server, "_resolve_auto_trade_contract", lambda _index_id, event: _resolve(event))
     monkeypatch.setattr(web_server, "risk_manager", enabled())
     account = SimulatedAccount(quantity=1, average_price=132.0, side="CALL", last_event_at=UPTREND.index[16])

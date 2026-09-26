@@ -466,35 +466,44 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
         exit_reason = exit_reasons.END_OF_SESSION
     else:
         exit_reason = None
-    db.record_signal(
-        source="algoedge.auto_trader", index_id=index_id, timeframe=interval,
-        action=event.kind, reason=event.option_symbol or f"exit @ {event.exit_level}",
-        price=event.underlying_price,
-    )
+    signal_row = {
+        "source": "algoedge.auto_trader", "index_id": index_id, "timeframe": interval,
+        "action": event.kind, "reason": event.option_symbol or f"exit @ {event.exit_level}",
+        "price": event.underlying_price,
+    }
+    order_row = None
     if result.order is not None:
         resolved_contract = order_manager.account.contract or contract_before_cycle
-        db.record_order(
-            source="algoedge.auto_trader", live=False, index_id=index_id,
-            side="SELL" if is_exit else "BUY", right=event.right, strike=event.strike,
-            trading_symbol=resolved_contract.trading_symbol if resolved_contract else None,
-            expiry_date=resolved_contract.expiry if resolved_contract else None,
-            order_type="MARKET", quantity=quantity,
+        order_row = {
+            "source": "algoedge.auto_trader", "live": False, "index_id": index_id,
+            "side": "SELL" if is_exit else "BUY", "right": event.right, "strike": event.strike,
+            "trading_symbol": resolved_contract.trading_symbol if resolved_contract else None,
+            "expiry_date": resolved_contract.expiry if resolved_contract else None,
+            "order_type": "MARKET", "quantity": quantity,
             # The simulated fill (an exit fills at its SL/target level, not the
             # bar close); falls back to the signal price for a FAILED order.
-            price=result.order.fill_price if result.order.fill_price is not None else event.underlying_price,
-            outcome=result.order.status, reason=result.order.detail,
-            realized_pnl=result.order.realized_pnl, exit_reason=exit_reason,
-        )
-        db.record_risk_snapshot(risk_manager, event="TRADE_RECORDED")
-        if result.order.status == "PLACED":
-            # Persists the paper account's post-fill state (quantity/side/
-            # average_price/last_event_at) so a process restart can restore
-            # it - see the startup restoration block above `app = FastAPI()`.
-            # A persistence failure here fails safe: db.record_* never
-            # raises, the in-memory account state (and the order already
-            # placed) is unaffected either way, only next restart's
-            # recovery would be degraded.
-            db.record_auto_trade_account_snapshot(index_id, order_manager.account, event=event.kind)
+            "price": result.order.fill_price if result.order.fill_price is not None else event.underlying_price,
+            "outcome": result.order.status, "reason": result.order.detail,
+            "realized_pnl": result.order.realized_pnl, "exit_reason": exit_reason,
+        }
+    # One transaction for the whole cycle: the signal, the order, the post-fill
+    # risk snapshot and - for a PLACED fill - the account snapshot a restart
+    # restores from (see the startup restoration block above
+    # `app = FastAPI()`). Either all are committed or none: a restart can
+    # never find an order without its account/risk state, or the reverse. A
+    # failure rolls everything back and is surfaced below as DATABASE_FAILURE;
+    # the in-memory paper fill (already made) is unaffected either way.
+    persistence = db.record_paper_cycle(
+        signal=signal_row,
+        order=order_row,
+        risk_manager=risk_manager if order_row is not None else None,
+        account_snapshot=(
+            (index_id, order_manager.account, event.kind)
+            if result.order is not None and result.order.status == "PLACED" else None
+        ),
+    )
+    if persistence == db.PERSIST_FAILED:
+        logger.error("%s: paper cycle %s was not persisted (DATABASE_FAILURE, rolled back)", index_id, event.kind)
     return {
         "indexId": index_id,
         "interval": interval,
@@ -521,6 +530,10 @@ def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> d
             "quantity": order_manager.account.quantity,
             "averagePrice": order_manager.account.average_price,
             "side": order_manager.account.side,
+        },
+        "persistence": {
+            "status": persistence,
+            "error": alerts.DATABASE_FAILURE if persistence == db.PERSIST_FAILED else None,
         },
     }
 
