@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import date
@@ -376,7 +377,36 @@ def auto_trading_consecutive_loss_halt_reset() -> dict:
     return auto_trading_status()
 
 
+# One paper cycle at a time per index. The scheduler runs cycles on the
+# event-loop thread and the manual "Run cycle now" endpoint runs in FastAPI's
+# threadpool, so two cycles for the SAME index could otherwise interleave and
+# both act on the same strategy event before either advanced the account's
+# last_event_at high-water mark. A second cycle for the same index WAITS (up
+# to the timeout) and then runs normally - it then sees the event as already
+# processed - rather than being dropped; different indices never wait on each
+# other. A cycle still waiting after the timeout fails explicitly with
+# CycleBusyError (logged by the scheduler, HTTP 409 from the endpoint).
+_CYCLE_LOCK_TIMEOUT_SECONDS = 30.0
+_cycle_locks: dict[str, threading.Lock] = {index_id: threading.Lock() for index_id in INDEX_DEFINITIONS}
+
+
+class CycleBusyError(RuntimeError):
+    """Another paper cycle for the same index held its lock past the timeout."""
+
+
 def _run_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
+    lock = _cycle_locks[index_id]
+    if not lock.acquire(timeout=_CYCLE_LOCK_TIMEOUT_SECONDS):
+        raise CycleBusyError(
+            f"Another paper cycle for {index_id} is still running after {_CYCLE_LOCK_TIMEOUT_SECONDS:.0f}s"
+        )
+    try:
+        return _execute_and_persist_cycle(index_id, interval, quantity)
+    finally:
+        lock.release()  # also when the cycle raises
+
+
+def _execute_and_persist_cycle(index_id: str, interval: str, quantity: int) -> dict:
     """Shared by the "Run cycle now" endpoint and the background scheduler,
     so a manual click and a scheduled tick always execute and persist the
     exact same way.
@@ -501,7 +531,10 @@ def auto_trading_run(index_id: str, interval: str = "5m", quantity: int = 1) -> 
         raise HTTPException(status_code=404, detail="Unknown index")
     if interval not in TIMEFRAMES:
         raise HTTPException(status_code=400, detail="Unsupported interval")
-    return _run_and_persist_cycle(index_id, interval, quantity)
+    try:
+        return _run_and_persist_cycle(index_id, interval, quantity)
+    except CycleBusyError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @app.get("/api/auto-trading/signals")
