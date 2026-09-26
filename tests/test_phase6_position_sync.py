@@ -235,14 +235,17 @@ def test_restart_rederives_the_same_levels_and_exits_identically(monkeypatch) ->
 def test_restart_without_the_entry_bar_leaves_the_exit_to_square_off(monkeypatch) -> None:
     df = session_walk(1, seed=7)
     # Entry bar outside the fetched window: no strategy levels can be derived.
+    # The entry is earlier the SAME day (the window starts after it); a
+    # prior-day entry is instead a missed square-off, closed at the next
+    # session's first cycle - see tests/test_auto_trade_missed_square_off.py.
     account = SimulatedAccount(quantity=1, average_price=24000.0, side="CALL",
-                               last_event_at=df.index[0] - pd.Timedelta(days=1))
-    result = cycle(monkeypatch, df.loc[:df.index[40]], enabled(), OrderManager(account),
+                               last_event_at=df.index[5])
+    result = cycle(monkeypatch, df.loc[df.index[10]:df.index[40]], enabled(), OrderManager(account),
                    now=bar_close(df.index[40]))
     assert result.order is None or not result.event.kind.startswith("ENTRY")
     assert account.quantity == 1  # never re-entered or double-opened
 
-    square_off = cycle(monkeypatch, df.loc[:df.index[72]], enabled(), OrderManager(account),
+    square_off = cycle(monkeypatch, df.loc[df.index[10]:df.index[72]], enabled(), OrderManager(account),
                        now=bar_close(df.index[72]))
     assert square_off.event.kind == "SQUARE_OFF" and account.quantity == 0
 

@@ -93,6 +93,13 @@ def run_cycle(
     this cycle's own account when not given, matching the original
     single-account behaviour.
 
+    Missed square-off recovery (Phase 7): a position still open from an
+    earlier trading day (its entry bar's IST date is before today) missed
+    that day's square-off; it is closed first, on the first in-session
+    cycle whose data has a bar from today, at today's latest close - see
+    `_stale_position_day()`. No strategy event (so no new entry) is
+    processed for that index until it is.
+
     Forced end-of-day square-off (Phase 4): once `risk_manager.limits.
     square_off_time` is reached within the trading session, any open
     position is closed unconditionally - this check runs before any
@@ -160,6 +167,26 @@ def run_cycle(
     today = now.date().isoformat()
     already_squared_off_today = account.square_off_date == today
     in_session = limits.trading_start <= now.time() <= limits.trading_end
+
+    # Missed square-off recovery: paper never holds overnight, so a position
+    # still open whose entry bar is from an EARLIER IST date than today
+    # missed that day's 15:20-15:30 square-off (scheduler/data failures, a
+    # restart). It is closed - before any strategy event, so no new entry can
+    # happen first - on the first in-session cycle whose market data already
+    # has a bar from today, at today's latest close; never at a stale
+    # prior-day price, which would fabricate a fill.
+    stale_since = _stale_position_day(account, now)
+    if stale_since is not None:
+        latest_bar_day = _as_ist(data.index[-1]).date()
+        if not in_session or latest_bar_day != now.date():
+            return AutoTradeCycleResult(None, RiskDecision(
+                False, f"Open position from {stale_since} missed its square-off - "
+                       "waiting for today's in-session market data to close it",
+            ), None)
+        return _force_close(
+            index_id, data, current_price, now, risk_manager, order_manager,
+            f"Missed square-off from {stale_since} - closed at today's latest price",
+        )
     square_off_due = (
         in_session and not already_squared_off_today
         and now.time() >= limits.square_off_time
@@ -167,31 +194,12 @@ def run_cycle(
     )
 
     if square_off_due:
-        square_off_event = TradeEvent(
-            timestamp=data.index[-1], kind="SQUARE_OFF", underlying_price=current_price,
-            option_symbol=None, stop_loss=None, target=None, exit_level=current_price,
+        # A failed attempt (fetch error, FAILED fill) never marks
+        # square_off_date, so every later cycle inside the window retries.
+        return _force_close(
+            index_id, data, current_price, now, risk_manager, order_manager,
+            "Forced end-of-day square-off", square_off_date=today,
         )
-        close_quantity = account.quantity
-        order_result = order_manager.place_event(
-            "SQUARE_OFF", current_price, close_quantity, index_id=index_id
-        )
-        if order_result.status == "PLACED":
-            risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=True)
-            # Both advanced together, atomically with the fill above - a
-            # persistence failure of the *durable* snapshot elsewhere
-            # (algoedge.db, always fail-safe/never-raising) can never roll
-            # these back, so a restart always resumes from a state that is
-            # at worst stale, never one that contradicts what actually
-            # happened in this process.
-            account.last_event_at = square_off_event.timestamp
-            account.square_off_date = today
-            return AutoTradeCycleResult(
-                square_off_event, RiskDecision(True, "Forced end-of-day square-off"), order_result
-            )
-        # A FAILED fill (e.g. a genuine race where quantity reached 0
-        # between the check above and the fill itself) must never mark
-        # square_off_date - it has to remain eligible to retry.
-        return AutoTradeCycleResult(square_off_event, RiskDecision(False, order_result.detail), order_result)
 
     # Position sync: the canonical strategy is evaluated against THIS paper
     # account's real position, not the position it would reconstruct by
@@ -322,6 +330,51 @@ def run_cycle(
         # eligible to fire on a later cycle once the gate reopens.
         account.last_event_at = event.timestamp
     return AutoTradeCycleResult(event, decision, order_result)
+
+
+def _force_close(
+    index_id: str, data: pd.DataFrame, current_price: float, now: datetime,
+    risk_manager: RiskManager, order_manager: OrderManager, reason: str, *, square_off_date: str | None = None,
+) -> AutoTradeCycleResult:
+    """Forced close of the whole open position at the latest close: the
+    15:20 square-off, or the recovery of a missed one. Bypasses
+    risk_manager.check() (a mandatory risk-reducing close), but still
+    records the trade so P&L/trade-count/consecutive-loss accounting stays
+    correct."""
+    account = order_manager.account
+    event = TradeEvent(
+        timestamp=data.index[-1], kind="SQUARE_OFF", underlying_price=current_price,
+        option_symbol=None, stop_loss=None, target=None, exit_level=current_price,
+    )
+    order_result = order_manager.place_event("SQUARE_OFF", current_price, account.quantity, index_id=index_id)
+    if order_result.status != "PLACED":
+        # A FAILED fill (e.g. a genuine race where quantity reached 0
+        # between the check and the fill itself) must never mark
+        # square_off_date - it has to remain eligible to retry.
+        return AutoTradeCycleResult(event, RiskDecision(False, order_result.detail), order_result)
+    risk_manager.record_trade(realized_pnl=order_result.realized_pnl, now=now, is_exit=True)
+    # Advanced together, atomically with the fill above - a persistence
+    # failure of the *durable* snapshot elsewhere (algoedge.db, always
+    # fail-safe/never-raising) can never roll these back, so a restart always
+    # resumes from a state that is at worst stale, never one that contradicts
+    # what actually happened in this process.
+    account.last_event_at = event.timestamp
+    if square_off_date is not None:
+        account.square_off_date = square_off_date
+    return AutoTradeCycleResult(event, RiskDecision(True, reason), order_result)
+
+
+def _stale_position_day(account: SimulatedAccount, now: datetime) -> Any:
+    """The IST date of an open position's entry bar if it is before today
+    (a missed square-off), else None. While a paper position is open,
+    account.last_event_at IS its entry bar (only the entry fill advances it;
+    exits, square-offs and expiries either flatten the account or only apply
+    when flat). None as well when that date is unknown - never closes a
+    position on a guess; the day's normal square-off still applies."""
+    if account.quantity <= 0 or account.last_event_at is None:
+        return None
+    entry_day = _as_ist(account.last_event_at).tz_convert(IST).date()  # the IST date, whatever the stored zone
+    return entry_day if entry_day < now.date() else None
 
 
 def _account_synced_events(
