@@ -1,0 +1,39 @@
+[Unit]
+Description=AlgoEdge Phase 8 status collector (read-only GET polling, paper/research only)
+Documentation=file:///opt/algoedge/app/research/phase8/README.md
+# Ordering only: never starts, stops or restarts the dashboard.
+After=network-online.target algoedge-phase8.service
+StartLimitIntervalSec=600
+StartLimitBurst=20
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+WorkingDirectory=/opt/algoedge/app
+Environment=PYTHONPATH=src:.
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=TZ=Asia/Kolkata
+# Outside Mon-Fri 09:15-15:30 IST every start (timer, boot, crash restart) is skipped.
+ExecCondition=/usr/local/lib/algoedge/phase8-collector-guard window
+ExecStartPre=/usr/local/lib/algoedge/phase8-collector-guard single
+ExecStart=@PYTHON@ -m research.phase8.tools.collector \
+    --out /opt/algoedge/app/research/phase8/evidence/campaign_status \
+    --base-url http://127.0.0.1:5181 \
+    --interval 60 \
+    --samples 0
+# SIGINT = the collector's own clean shutdown path (KeyboardInterrupt closes the
+# evidence file). Every sample is already fsynced when written.
+KillSignal=SIGINT
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=15
+# Least privilege: the evidence directory is the only writable path.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/opt/algoedge/app/research/phase8/evidence/campaign_status
+# Deliberately NO EnvironmentFile: the collector needs no credentials.
+# No [Install] section: started only by its timer, never unconditionally at boot.

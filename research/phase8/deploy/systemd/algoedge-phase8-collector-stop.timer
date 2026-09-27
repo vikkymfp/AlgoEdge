@@ -1,0 +1,11 @@
+[Unit]
+Description=Stop the AlgoEdge Phase 8 collector at 15:30 IST Mon-Fri
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 15:30:00 Asia/Kolkata
+AccuracySec=1s
+Persistent=false
+Unit=algoedge-phase8-collector-stop.service
+
+[Install]
+WantedBy=timers.target

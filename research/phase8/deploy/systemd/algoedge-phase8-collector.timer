@@ -1,0 +1,14 @@
+[Unit]
+Description=Start the AlgoEdge Phase 8 collector at 09:15 IST Mon-Fri, and after boot if inside the window
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:15:00 Asia/Kolkata
+# After a reboot: trigger once; the service's ExecCondition decides whether
+# the schedule currently permits collection.
+OnBootSec=90s
+AccuracySec=1s
+Persistent=false
+Unit=algoedge-phase8-collector.service
+
+[Install]
+WantedBy=timers.target

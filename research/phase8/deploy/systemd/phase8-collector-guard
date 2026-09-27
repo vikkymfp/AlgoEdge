@@ -1,0 +1,52 @@
+#!/bin/bash
+# Guard for algoedge-phase8-collector.service. Installed to
+# /usr/local/lib/algoedge/phase8-collector-guard (outside the repo).
+#
+#   window  exit 0 inside Mon-Fri 09:15:00-15:29:59 Asia/Kolkata, else 1
+#           (used as ExecCondition: outside the window the start is skipped,
+#           not failed - this also gates boot starts and crash restarts)
+#   single  exit 0 if no other collector process exists, else 1
+#           (used as ExecStartPre: a collector started by hand makes the
+#           systemd start fail loudly instead of running a duplicate)
+#   list    print "pid args" of every running collector (for inspection)
+#
+# A collector is a process whose argv holds "-m research.phase8.tools.collector"
+# as two real arguments - not any command line that merely contains the text
+# (a shell, grep or tail mentioning it is not a collector).
+set -u
+export TZ=Asia/Kolkata
+
+collectors() {
+  local d pid i
+  local -a argv
+  for d in /proc/[0-9]*; do
+    pid=${d#/proc/}
+    [[ $pid == "$$" ]] && continue
+    mapfile -d '' -t argv < "$d/cmdline" 2>/dev/null || continue
+    for ((i = 0; i + 1 < ${#argv[@]}; i++)); do
+      if [[ ${argv[i]} == -m && ${argv[i+1]} == research.phase8.tools.collector ]]; then
+        echo "$pid ${argv[*]}"; break
+      fi
+    done
+  done
+}
+
+case "${1:-}" in
+  window)
+    read -r dow hm < <(date '+%u %H%M')   # %u: 1=Mon .. 7=Sun
+    now=$((10#$hm))
+    if (( dow <= 5 && now >= 915 && now < 1530 )); then
+      echo "inside collection window ($(date '+%a %F %T %Z'))"; exit 0
+    fi
+    echo "outside collection window ($(date '+%a %F %T %Z')) - not starting"; exit 1 ;;
+  single)
+    running=$(collectors)
+    if [[ -n $running ]]; then
+      echo "collector already running - refusing to start a duplicate:"; echo "$running"; exit 1
+    fi
+    exit 0 ;;
+  list)
+    collectors; exit 0 ;;
+  *)
+    echo "usage: $0 window|single|list" >&2; exit 2 ;;
+esac

@@ -1,0 +1,6 @@
+[Unit]
+Description=Stop the AlgoEdge Phase 8 collector (15:30 IST)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/systemctl stop algoedge-phase8-collector.service
