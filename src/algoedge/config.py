@@ -28,6 +28,10 @@ class Settings(BaseSettings):
     db_server: str = ""
     db_name: str = "AlgoEdge"
     db_trusted_connection: bool = True
+    # SQL authentication (used when db_trusted_connection is False, e.g. SQL
+    # Server on Linux). Never commit real values; set them in .env only.
+    db_user: str = ""
+    db_password: str = ""
     db_odbc_driver: str = "ODBC Driver 18 for SQL Server"
 
     # Fernet key (base64, from Fernet.generate_key()) used to encrypt broker
