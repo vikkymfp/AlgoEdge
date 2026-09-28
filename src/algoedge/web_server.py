@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
-from algoedge import alerts, db, exit_reasons
+from algoedge import alerts, collector_reports, db, exit_reasons
 from algoedge.auto_trader import (
     REASON_EXIT_WITHOUT_POSITION,
     REASON_MISSED_SQUARE_OFF_WAITING_PREFIX,
@@ -1278,6 +1278,47 @@ def strategy_performance_report() -> dict:
             for perf in performance
         ],
     }
+
+
+@app.get("/api/reports/phase8/collector-files")
+def phase8_collector_files() -> dict:
+    """Read-only list of the Phase 8 collector's evidence files, newest first."""
+    reports = collector_reports.list_collector_reports(collector_reports.COLLECTOR_EVIDENCE_DIR)
+    return {
+        "files": [
+            {
+                "name": report.name,
+                "sizeBytes": report.size_bytes,
+                "modifiedAt": report.modified_at.isoformat(),
+            }
+            for report in reports
+        ],
+    }
+
+
+@app.get("/api/reports/phase8/collector-files/{filename}")
+def phase8_collector_file_download(filename: str) -> Response:
+    """Serves one collector evidence file byte-for-byte as an attachment.
+    Only bare *.jsonl names inside the fixed evidence directory are
+    accepted - never a path. The bytes are read once up front so a file the
+    collector is still appending to downloads as a consistent snapshot."""
+    try:
+        path = collector_reports.resolve_collector_report(
+            filename, collector_reports.COLLECTOR_EVIDENCE_DIR
+        )
+    except collector_reports.InvalidReportName as error:
+        raise HTTPException(status_code=400, detail="Not a collector report filename.") from error
+    if path is None:
+        raise HTTPException(status_code=404, detail="Collector report not found.")
+    try:
+        content = path.read_bytes()
+    except OSError as error:
+        raise HTTPException(status_code=404, detail="Collector report not found.") from error
+    return Response(
+        content=content,
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="{path.name}"'},
+    )
 
 
 def _broker_status_payload() -> dict:

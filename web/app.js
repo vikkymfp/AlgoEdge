@@ -698,6 +698,42 @@ async function loadStrategyPerformance() {
   }
 }
 
+function formatFileSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function renderCollectorReportsTable(files) {
+  const body = document.querySelector('#collectorReportsBody');
+  if (files.length === 0) {
+    body.innerHTML = '<tr class="empty-row"><td colspan="4">No collector reports available.</td></tr>';
+    return;
+  }
+  body.innerHTML = files.map((file) => `
+    <tr>
+      <td class="mono">${escapeHtml(file.name)}</td>
+      <td class="mono">${formatTimestamp(file.modifiedAt)}</td>
+      <td class="mono">${formatFileSize(file.sizeBytes)}</td>
+      <td><button class="text-button" type="button" data-collector-file="${escapeHtml(file.name)}">Download</button></td>
+    </tr>
+  `).join('');
+  body.querySelectorAll('button[data-collector-file]').forEach((button) => button.addEventListener('click', () => {
+    triggerDownload(`/api/reports/phase8/collector-files/${encodeURIComponent(button.dataset.collectorFile)}`);
+  }));
+}
+
+async function loadCollectorReports() {
+  try {
+    const response = await fetch('/api/reports/phase8/collector-files', { headers: { Accept: 'application/json' } });
+    if (!response.ok) throw new Error('Collector reports API unavailable');
+    const payload = await response.json();
+    renderCollectorReportsTable(payload.files || []);
+  } catch {
+    document.querySelector('#collectorReportsBody').innerHTML = '<tr class="empty-row"><td colspan="4">Could not load collector reports.</td></tr>';
+  }
+}
+
 function renderAlertsTable(alertRows) {
   const body = document.querySelector('#alertsBody');
   if (alertRows.length === 0) {
@@ -2448,6 +2484,7 @@ loadPnl();
 loadDailySummary();
 loadPeriodSummary();
 loadStrategyPerformance();
+loadCollectorReports();
 loadAutoTradingSignals();
 loadAutoTradingPerformance();
 loadAutoTradingEquityCurve();
@@ -2486,6 +2523,7 @@ marketSyncTimer = window.setInterval(() => {
   loadDailySummary();
   loadPeriodSummary();
   loadStrategyPerformance();
+  loadCollectorReports();
   loadManualTrades();
   loadAutoTradingSignals();
   loadAutoTradingPerformance();
