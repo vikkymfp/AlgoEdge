@@ -33,6 +33,14 @@ _engine: Any = None
 _session_factory: sessionmaker | None = None
 
 
+def _odbc_value(value: str) -> str:
+    """Brace-quote an ODBC attribute value only when it contains characters
+    that would otherwise break the connection string (e.g. ';' in a password)."""
+    if any(char in value for char in ";{}=") or value != value.strip():
+        return "{" + value.replace("}", "}}") + "}"
+    return value
+
+
 def _odbc_connection_url(settings: Settings, database: str) -> str:
     odbc_str = (
         f"DRIVER={{{settings.db_odbc_driver}}};"
@@ -42,6 +50,13 @@ def _odbc_connection_url(settings: Settings, database: str) -> str:
     )
     if settings.db_trusted_connection:
         odbc_str += "Trusted_Connection=yes;"
+    else:
+        if not settings.db_user or not settings.db_password:
+            raise ValueError(
+                "ALGOEDGE_DB_USER and ALGOEDGE_DB_PASSWORD are required when "
+                "ALGOEDGE_DB_TRUSTED_CONNECTION is false."
+            )
+        odbc_str += f"UID={_odbc_value(settings.db_user)};PWD={_odbc_value(settings.db_password)};"
     return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_str)}"
 
 
@@ -135,7 +150,7 @@ def init_db(settings: Settings | None = None) -> bool:
         _session_factory = sessionmaker(bind=engine)
         logger.info("Connected to %s / %s", settings.db_server, settings.db_name)
         return True
-    except SQLAlchemyError as error:
+    except (SQLAlchemyError, ValueError) as error:
         logger.warning("Database unavailable, persistence disabled: %s", error)
         _engine = None
         _session_factory = None

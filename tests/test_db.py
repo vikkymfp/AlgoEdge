@@ -300,3 +300,76 @@ def test_check_connection_keeps_last_successful_time_after_a_later_failure(monke
 
     assert second["connected"] is False
     assert second["lastSuccessfulCheckAt"] == first["lastSuccessfulCheckAt"]
+
+
+def _decoded_odbc(url: str) -> str:
+    from urllib.parse import unquote_plus
+
+    return unquote_plus(url.split("odbc_connect=", 1)[1])
+
+
+def test_odbc_url_trusted_connection_is_unchanged() -> None:
+    settings = Settings(db_server="localhost", db_trusted_connection=True)
+
+    odbc = _decoded_odbc(db_module._odbc_connection_url(settings, "AlgoEdge"))
+
+    assert odbc == (
+        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AlgoEdge;"
+        "TrustServerCertificate=yes;Trusted_Connection=yes;"
+    )
+
+
+def test_odbc_url_sql_auth_uses_uid_and_pwd() -> None:
+    settings = Settings(
+        db_server="localhost",
+        db_trusted_connection=False,
+        db_user="algoedge_app",
+        db_password="placeholder-pw",
+    )
+
+    odbc = _decoded_odbc(db_module._odbc_connection_url(settings, "AlgoEdge"))
+
+    assert odbc == (
+        "DRIVER={ODBC Driver 18 for SQL Server};SERVER=localhost;DATABASE=AlgoEdge;"
+        "TrustServerCertificate=yes;UID=algoedge_app;PWD=placeholder-pw;"
+    )
+    assert "Trusted_Connection" not in odbc
+
+
+def test_odbc_url_sql_auth_quotes_special_characters() -> None:
+    settings = Settings(
+        db_server="localhost", db_trusted_connection=False, db_user="u", db_password="a;b}c"
+    )
+
+    odbc = _decoded_odbc(db_module._odbc_connection_url(settings, "AlgoEdge"))
+
+    assert odbc.endswith("UID=u;PWD={a;b}}c};")
+
+
+@pytest.mark.parametrize(("user", "password"), [("", "pw"), ("user", ""), ("", "")])
+def test_odbc_url_sql_auth_requires_credentials(user: str, password: str) -> None:
+    settings = Settings(
+        db_server="localhost", db_trusted_connection=False, db_user=user, db_password=password
+    )
+
+    with pytest.raises(ValueError, match="ALGOEDGE_DB_USER and ALGOEDGE_DB_PASSWORD"):
+        db_module._odbc_connection_url(settings, "AlgoEdge")
+
+
+def test_init_db_disables_persistence_when_sql_auth_credentials_missing() -> None:
+    settings = Settings(db_server="localhost", db_trusted_connection=False)
+
+    assert db_module.init_db(settings) is False
+    assert db_module.is_available() is False
+
+
+def test_sql_auth_settings_load_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("ALGOEDGE_DB_TRUSTED_CONNECTION", "false")
+    monkeypatch.setenv("ALGOEDGE_DB_USER", "env_user")
+    monkeypatch.setenv("ALGOEDGE_DB_PASSWORD", "env_pw")
+
+    settings = Settings(_env_file=None)
+
+    assert settings.db_trusted_connection is False
+    assert settings.db_user == "env_user"
+    assert settings.db_password == "env_pw"
