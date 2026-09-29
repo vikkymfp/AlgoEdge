@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#f5f7fb" />
     <title>AlgoEdge Grid Monitor</title>
     <link rel="icon" type="image/png" href="logo.png" />
-    <link rel="stylesheet" href="styles.css?v=20260930-ui2" />
+    <link rel="stylesheet" href="styles.css?v=20260930-ui3" />
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   </head>
   <body>
@@ -103,9 +103,6 @@
           <span class="sync-badge" id="syncBadge">3s auto-sync</span>
         </div>
         <div class="topbar-actions">
-          <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh live data" title="Refresh live data">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 10-2.34 5.66M20 11V5m0 6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </button>
           <div class="user-chip" title="Signed-in user">
             <svg width="18" height="18" class="user-chip-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2"/><path d="M4 20a8 8 0 0116 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <span class="user-chip-name" id="authUser" hidden></span>
@@ -694,7 +691,7 @@
           </div>
 
           <div class="table-wrap">
-            <table>
+            <table aria-label="Index accounts">
               <thead>
                 <tr><th>Index</th><th>Position</th><th>Avg price</th><th>Simulated cash</th></tr>
               </thead>
@@ -1114,6 +1111,8 @@
       <footer><span>AlgoEdge / private workspace</span><span id="footerMode">Paper data until API feed is connected</span></footer>
       </div>
     </div>
-    <script src="app.js?v=20260930-ui2"></script>
+    <script src="session-guard.js?v=20260930-ui3"></script>
+    <script src="pager.js?v=20260930-ui3"></script>
+    <script src="app.js?v=20260930-ui3"></script>
   </body>
 </html>

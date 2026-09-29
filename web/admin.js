@@ -4,9 +4,23 @@
 (() => {
   'use strict';
 
-  const state = { page: 1, pageSize: 50, total: 0, csrf: null, me: null };
+  const state = { page: 1, pageSize: window.AlgoPager.DEFAULT_PAGE_SIZE, total: 0, csrf: null, me: null };
   const $ = (id) => document.getElementById(id);
   const message = $('adminMessage');
+  // Login activity pages on the server (page / page_size, which the API
+  // already supports); the users list is paged client-side over the rows
+  // /api/admin/users already returns.
+  const activityPager = window.AlgoPager.create({
+    label: 'Login activity',
+    pageSize: state.pageSize,
+    onChange: ({ page, pageSize }) => {
+      state.page = page;
+      state.pageSize = pageSize;
+      loadActivity().catch((error) => show(error.message));
+    },
+  });
+  $('activityPager').replaceWith(activityPager.element);
+  window.AlgoPager.paginateRows($('usersBody'), { label: 'Users' });
 
   function show(text, kind = 'error') {
     message.textContent = text;
@@ -73,10 +87,7 @@
       row.appendChild(td);
       body.appendChild(row);
     }
-    const pages = Math.max(1, Math.ceil(state.total / state.pageSize));
-    $('activityCount').textContent = `${state.total} attempt(s) · page ${state.page} of ${pages}`;
-    $('prevPage').disabled = state.page <= 1;
-    $('nextPage').disabled = state.page >= pages;
+    activityPager.update(state.total, state.page);
   }
 
   function actionButton(label, handler, className = 'ghost-button') {
@@ -154,8 +165,6 @@
     state.page = 1;
     loadActivity().catch((error) => show(error.message));
   });
-  $('prevPage').addEventListener('click', () => { state.page -= 1; loadActivity().catch((e) => show(e.message)); });
-  $('nextPage').addEventListener('click', () => { state.page += 1; loadActivity().catch((e) => show(e.message)); });
 
   $('createUserForm').addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -191,6 +200,7 @@
         window.location.replace('/');
         return;
       }
+      window.AlgoSessionGuard.install(() => state.csrf);
       await loadUsers();
       await loadActivity();
     } catch (error) {

@@ -49,7 +49,7 @@
     button.disabled = value;
     button.setAttribute('aria-busy', String(value));
     label.textContent = value ? 'Signing in…' : 'Sign in';
-    [identifier, password, captchaInput, refresh].forEach((element) => { element.disabled = value; });
+    [identifier, password, captchaInput, refresh, toggle].forEach((element) => { element.disabled = value; });
   }
 
   function validate() {
@@ -62,11 +62,19 @@
     return null;
   }
 
+  // Eye = password hidden (click to show); eye-off = visible (click to hide).
+  // Only the input's type changes - the value is never copied anywhere.
+  const eye = toggle.querySelector('.icon-eye');
+  const eyeOff = toggle.querySelector('.icon-eye-off');
   toggle.addEventListener('click', () => {
     const show = password.type === 'password';
     password.type = show ? 'text' : 'password';
-    toggle.textContent = show ? 'Hide' : 'Show';
+    const text = show ? 'Hide password' : 'Show password';
+    toggle.setAttribute('aria-label', text);
+    toggle.title = text;
     toggle.setAttribute('aria-pressed', String(show));
+    eye.hidden = show;
+    eyeOff.hidden = !show;
     password.focus();
   });
 
@@ -100,6 +108,7 @@
       if (response.ok) {
         signedIn = true;
         password.value = '';
+        password.type = 'password';
         window.location.replace('/');
         return;
       }

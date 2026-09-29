@@ -264,8 +264,6 @@ main > section, main > [id] { scroll-margin-top: calc(var(--topbar-h) + 16px); }
 .icon-button svg { width: 18px; height: 18px; }
 .icon-button:hover { background: var(--surface-hover); border-color: var(--border-strong); }
 .icon-button:disabled { cursor: wait; opacity: .5; }
-.icon-button.is-loading svg { animation: spin .8s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .user-chip {
   display: inline-flex; align-items: center; gap: 8px; min-height: 40px; max-width: 260px; padding: 0 12px;
@@ -944,4 +942,42 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   .overview-metrics strong { margin-top: 0; text-align: right; }
   .source-label { white-space: normal; }
   .positions-summary-strip, .account-summary.compact, .account-summary, .option-market-summary { grid-template-columns: 1fr; }
+}
+
+/* ---------- shared pagination (pager.js) ---------- */
+.ae-pager {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border);
+  font-size: 13px; color: var(--text-muted); min-width: 0;
+}
+.ae-pager-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
+.ae-pager-summary { margin: 0; font-variant-numeric: tabular-nums; }
+.ae-pager-size { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.ae-pager-size select {
+  min-height: 34px; padding: 4px 8px; font: inherit; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+}
+.ae-pager-controls { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ae-pager-pages { display: flex; align-items: center; gap: 4px; }
+.ae-pager-button {
+  min-width: 34px; min-height: 34px; padding: 0 10px; font: inherit; font-weight: 600;
+  color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.ae-pager-button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--border-strong); }
+.ae-pager-button[aria-current="page"] { color: #fff; background: var(--primary); border-color: var(--primary); }
+.ae-pager-button:disabled { opacity: .45; cursor: not-allowed; }
+.ae-pager-button:focus-visible, .ae-pager-size select:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ae-pager-gap { padding: 0 2px; color: var(--text-faint); }
+@media (prefers-color-scheme: dark) {
+  .ae-pager-button[aria-current="page"] { color: var(--ink); }
+}
+@media (max-width: 640px) {
+  .ae-pager { flex-direction: column; align-items: stretch; }
+  .ae-pager-meta { justify-content: space-between; }
+  .ae-pager-controls { justify-content: space-between; }
+  /* Only the current page number on phones; Previous/Next do the stepping. */
+  .ae-pager-page:not([aria-current]), .ae-pager-gap { display: none; }
+  .ae-pager-button, .ae-pager-size select { min-height: 44px; }
+  .ae-pager-step { flex: 1 1 0; }
 }

@@ -40,6 +40,7 @@ const authSession = (() => {
 
   ready.then((user) => {
     if (!user) return;
+    if (window.AlgoSessionGuard) window.AlgoSessionGuard.install(() => csrfToken);
     const label = document.getElementById('authUser');
     if (label) {
       label.textContent = `${user.email || user.mobileNo} · ${user.role}`;
@@ -1300,12 +1301,10 @@ async function loadGrids() {
   setRefreshing(false);
 }
 
+// Guards the 3s broker poll against overlapping grid loads. (The manual
+// header refresh button was removed; auto-sync below is unchanged.)
 function setRefreshing(active) {
   isRefreshing = active;
-  const button = document.querySelector('#refreshButton');
-  button.disabled = active;
-  button.classList.toggle('is-loading', active);
-  button.setAttribute('aria-label', active ? 'Refreshing live data' : 'Refresh live data');
 }
 
 async function loadMarket() {
@@ -1630,17 +1629,6 @@ document.querySelector('#autoLossHaltResetButton').addEventListener('click', res
 document.querySelector('#autoRunButton').addEventListener('click', runAutoTradingCycle);
 renderAutoRunIndexTabs();
 initAutoEquityChart();
-
-function refreshAll() {
-  if (isRefreshing) return;
-  loadGrids();
-  loadPositions();
-  loadOrders();
-  loadAutoTradingStatus();
-  loadMarket();
-  loadCandles();
-  loadStrategySignal();
-}
 
 function chartColors() {
   const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -2023,7 +2011,6 @@ function initNav() {
   });
 }
 
-document.querySelector('#refreshButton').addEventListener('click', refreshAll);
 
 (function initResponsiveNav() {
   const body = document.body;
@@ -2719,3 +2706,9 @@ marketSyncTimer = window.setInterval(() => {
   loadSystemHealth();
   loadOptionMarket();
 }, MARKET_SYNC_INTERVAL_MS);
+
+// Client-side pagination for every data table (pager.js). None of the
+// dashboard's list APIs accept a page/offset, so each page is cut from the
+// rows the latest render already produced - no extra requests, and the
+// timers above keep their existing intervals.
+if (window.AlgoPager) window.AlgoPager.autoPaginate(document.querySelector('#main-content'));

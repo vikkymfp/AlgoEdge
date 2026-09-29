@@ -45,6 +45,11 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
 
 body.auth-body {
   margin: 0;
@@ -75,6 +80,15 @@ body.auth-body {
 .auth-eyebrow { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--auth-eyebrow); }
 .auth-brand h1 { margin: 2px 0 0; font-size: 21px; font-weight: 700; letter-spacing: -.01em; }
 
+/* Sign-in page wordmark: the logo already carries the name, so it stands
+   alone, centred. White plate keeps its dark lettering legible in dark mode;
+   width/height attributes plus height:auto keep the 1942x809 aspect ratio. */
+.login-brand {
+  display: flex; justify-content: center; margin: -4px 0 26px;
+  padding: 14px 18px; background: #fff; border: 1px solid var(--auth-border); border-radius: 16px;
+}
+.login-logo { display: block; width: 100%; max-width: 300px; height: auto; }
+
 .auth-form { display: grid; gap: 18px; }
 .field { display: grid; gap: 7px; }
 .field label { font-size: 13px; font-weight: 600; color: var(--auth-muted); }
@@ -97,7 +111,16 @@ body.auth-body {
 }
 #captcha { font-family: var(--auth-mono); letter-spacing: .3em; text-transform: uppercase; }
 
-.input-with-button { display: flex; gap: 8px; }
+.password-wrap { position: relative; }
+.password-wrap input { padding-right: 52px; }
+.password-toggle {
+  position: absolute; top: 50%; right: 4px; transform: translateY(-50%);
+  display: grid; place-items: center; width: 40px; height: 40px; padding: 0;
+  color: var(--auth-muted); background: transparent; border: 0; border-radius: 8px; cursor: pointer;
+}
+.password-toggle:hover:not(:disabled) { color: var(--auth-text); background: var(--auth-surface); }
+.password-toggle svg { display: block; width: 20px; height: 20px; }
+.password-toggle svg[hidden] { display: none; }
 .captcha-row { display: flex; gap: 8px; align-items: center; }
 .captcha-image {
   flex: 1;
@@ -154,16 +177,39 @@ button:disabled { opacity: .6; cursor: progress; }
 .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; }
 .badge.ok { color: var(--auth-success); background: var(--auth-success-soft); }
 .badge.fail { color: var(--auth-danger); background: var(--auth-danger-soft); }
-.pager { display: flex; gap: 8px; align-items: center; justify-content: flex-end; margin-top: 12px; color: var(--auth-muted); }
 .row-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .row-actions button { min-height: 32px; padding: 0 10px; font-size: 12px; }
 .create-user { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; align-items: end; margin-top: 16px; }
+
+/* ---------- shared pagination (pager.js) ---------- */
+.ae-pager {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: 10px 16px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--auth-border);
+  font-size: 13px; color: var(--auth-muted); min-width: 0;
+}
+.ae-pager-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; min-width: 0; }
+.ae-pager-summary { margin: 0; font-variant-numeric: tabular-nums; }
+.ae-pager-size { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.auth-body .ae-pager-size select { width: auto; min-height: 34px; padding: 4px 8px; font-size: 13px; }
+.ae-pager-controls { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.ae-pager-pages { display: flex; align-items: center; gap: 4px; }
+.ae-pager-button {
+  min-width: 34px; min-height: 34px; padding: 0 10px; font: inherit; font-weight: 600;
+  color: var(--auth-text); background: var(--auth-surface); border: 1px solid var(--auth-border);
+  border-radius: 8px; cursor: pointer; font-variant-numeric: tabular-nums;
+}
+.ae-pager-button:hover:not(:disabled) { background: var(--auth-surface-alt); }
+.ae-pager-button[aria-current="page"] { color: #fff; background: var(--auth-primary); border-color: var(--auth-primary); }
+.ae-pager-button:disabled { opacity: .45; cursor: not-allowed; }
+.ae-pager-gap { padding: 0 2px; color: var(--auth-muted); }
 
 /* ---------- responsive ---------- */
 @media (max-width: 480px) {
   .auth-shell { place-items: start stretch; padding: 16px 12px; }
   .auth-card { max-width: none; padding: 24px 18px 20px; border-radius: 16px; }
   .auth-brand h1 { font-size: 19px; }
+  .login-brand { margin-bottom: 20px; padding: 12px 14px; }
+  .login-logo { max-width: 240px; }
   .captcha-row { flex-wrap: wrap; }
   .captcha-image { max-width: none; flex: 1 1 180px; }
 }
@@ -175,6 +221,11 @@ button:disabled { opacity: .6; cursor: progress; }
   /* Readable rows that scroll inside their card rather than wrapping every cell. */
   .table-wrap { -webkit-overflow-scrolling: touch; }
   .admin-table { min-width: 1080px; }
+  .ae-pager { flex-direction: column; align-items: stretch; }
+  .ae-pager-meta, .ae-pager-controls { justify-content: space-between; }
+  .ae-pager-page:not([aria-current]), .ae-pager-gap { display: none; }
+  .ae-pager-button, .auth-body .ae-pager-size select { min-height: 44px; }
+  .ae-pager-step { flex: 1 1 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: .01ms !important; }

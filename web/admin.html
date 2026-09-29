@@ -6,7 +6,7 @@
     <meta name="referrer" content="same-origin" />
     <title>Administration · AlgoEdge</title>
     <link rel="icon" type="image/png" href="logo.png" />
-    <link rel="stylesheet" href="auth.css" />
+    <link rel="stylesheet" href="auth.css?v=20260930-ui3" />
   </head>
   <body class="auth-body">
     <div class="admin-shell">
@@ -63,11 +63,7 @@
             <tbody id="activityBody"></tbody>
           </table>
         </div>
-        <div class="pager">
-          <span id="activityCount"></span>
-          <button type="button" id="prevPage" class="ghost-button">Previous</button>
-          <button type="button" id="nextPage" class="ghost-button">Next</button>
-        </div>
+        <div id="activityPager"></div>
       </section>
 
       <section class="admin-panel" aria-labelledby="usersTitle">
@@ -99,6 +95,8 @@
         </form>
       </section>
     </div>
-    <script src="admin.js"></script>
+    <script src="session-guard.js?v=20260930-ui3"></script>
+    <script src="pager.js?v=20260930-ui3"></script>
+    <script src="admin.js?v=20260930-ui3"></script>
   </body>
 </html>
