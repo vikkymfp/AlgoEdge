@@ -129,8 +129,17 @@ main > section, main > [id] { scroll-margin-top: calc(var(--topbar-h) + 16px); }
   background: var(--surface);
   transition: width .18s ease, flex-basis .18s ease, transform .2s ease;
 }
-.sidebar-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 6px 14px; }
-.sidebar-brand .brand-logo-chip { height: 40px; }
+.sidebar-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 2px 14px; }
+/* Sidebar wordmark: sized by width (height follows the 1942x809 aspect
+   ratio), and a link to the Dashboard. */
+.sidebar-brand .brand-logo-chip {
+  flex: 1 1 auto; min-width: 0; max-width: 196px; height: auto; padding: 8px 12px;
+  justify-content: center; text-decoration: none;
+  transition: border-color .12s ease, box-shadow .12s ease;
+}
+.sidebar-brand .brand-logo { width: 100%; height: auto; }
+.home-link:hover .brand-logo-chip, .sidebar-brand .home-link:hover { border-color: var(--border-strong); }
+.home-link:focus-visible, .home-link:focus-visible .brand-logo-chip { outline: none; box-shadow: var(--focus-ring); }
 .sidebar .sidebar-close { display: none; }
 /* Only the nav list scrolls when it is taller than the viewport. */
 .rail-nav {
@@ -178,13 +187,13 @@ main > section, main > [id] { scroll-margin-top: calc(var(--topbar-h) + 16px); }
 @media (min-width: 641px) and (max-width: 1024px) {
   .sidebar .rail-group-label { display: none; }
   .sidebar .sidebar-brand { justify-content: center; padding: 0 0 12px; }
-  .sidebar .sidebar-brand .brand-logo-chip { display: none; }
+  .sidebar .sidebar-brand .brand-logo-chip { max-width: 100%; padding: 6px 5px; border-radius: 8px; }
   .sidebar .rail-link { flex-direction: column; justify-content: center; gap: 4px; padding: 9px 4px; }
   .sidebar .rail-link small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 9.5px; font-weight: 600; letter-spacing: -.01em; }
   .sidebar .rail-nav { gap: 4px; }
 }
 .sidebar-collapsed .sidebar .sidebar-brand { justify-content: center; }
-.sidebar-collapsed .sidebar .sidebar-brand .brand-logo-chip { display: none; }
+.sidebar-collapsed .sidebar .sidebar-brand .brand-logo-chip { max-width: 100%; padding: 6px 5px; border-radius: 8px; }
 .sidebar-collapsed .sidebar .rail-link { flex-direction: column; justify-content: center; gap: 4px; padding: 9px 4px; }
 .sidebar-collapsed .sidebar .rail-link small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; font-size: 9.5px; font-weight: 600; letter-spacing: -.01em; }
 .sidebar-collapsed .sidebar .sidebar-collapse { justify-content: center; }
@@ -225,12 +234,22 @@ main > section, main > [id] { scroll-margin-top: calc(var(--topbar-h) + 16px); }
 }
 .brand-logo { display: block; height: 100%; width: auto; }
 @media (min-width: 641px) { .topbar-start .brand { display: none; } }
+/* Status pills reflow onto extra rows when space runs out - never clipped,
+   never scrolled sideways, never under the account controls. */
 .topbar-status {
-  display: flex; align-items: center; gap: 8px; flex: 1 1 auto; min-width: 0;
-  overflow-x: auto; scrollbar-width: none;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  flex: 1 1 0; min-width: 0;
 }
-.topbar-status::-webkit-scrollbar { display: none; }
-.topbar-actions { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; }
+.topbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; flex: 0 1 auto; min-width: 0; margin-left: auto; }
+.user-chip-name { max-width: clamp(120px, 16vw, 260px); }
+/* Narrow tablets: the pills get a full-width row under the account
+   controls instead of squeezing into several short rows beside them. */
+@media (max-width: 900px) {
+  .topbar { flex-wrap: wrap; row-gap: 8px; }
+  .topbar-start { order: 1; }
+  .topbar-actions { order: 2; }
+  .topbar-status { order: 3; flex: 1 0 100%; }
+}
 
 /* Deliberately dominates the normal connection pills per the priority
    order CRITICAL ERROR > TRADING BLOCKED > RISK WARNING >
@@ -253,7 +272,6 @@ main > section, main > [id] { scroll-margin-top: calc(var(--topbar-h) + 16px); }
 .connection-pill { color: var(--success-text); background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 25%, transparent); }
 .connection-pill i { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
 .connection-pill .pill-icon { width: 14px; height: 14px; }
-.sync-badge { flex: none; color: var(--text-faint); font: 500 11px var(--font-mono); letter-spacing: .03em; text-transform: uppercase; white-space: nowrap; }
 
 .icon-button {
   display: grid; place-items: center; width: 40px; height: 40px; flex: none;
@@ -869,7 +887,6 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   .lower-grid { grid-template-columns: 1fr; }
   .account-summary { grid-template-columns: repeat(2, 1fr); }
   .positions-summary-strip, .account-summary.compact, .option-market-summary { grid-template-columns: repeat(2, 1fr); }
-  .sync-badge { display: none; }
   .user-chip-name { max-width: 140px; }
 }
 @media (max-width: 640px) {
@@ -878,8 +895,9 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   .topbar { flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
   .topbar-start { order: 1; }
   .topbar-actions { order: 2; gap: 6px; }
-  /* Status pills move to their own swipeable row under the header. */
+  /* Status pills move to their own row under the header and wrap there. */
   .topbar-status { order: 3; flex: 1 0 100%; padding-bottom: 2px; }
+  .topbar-actions { flex-wrap: nowrap; }
   .user-chip-name, .signout-button span { display: none; }
   .user-chip { padding: 0; width: 40px; justify-content: center; }
   .signout-button { width: 40px; padding: 0; justify-content: center; }

@@ -2000,6 +2000,14 @@ function initNav() {
       navigateTo(link.getAttribute('href').slice(1));
     });
   });
+  // The AlgoEdge logos (sidebar and mobile header) open the Dashboard (Market
+  // pulse) through the same in-page navigation - no reload.
+  document.querySelectorAll('.home-link').forEach((link) => {
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      navigateTo('market-pulse');
+    });
+  });
   // Route persistence: a refresh (or a shared link) lands back on whichever
   // page was open, derived from the URL hash rather than click history alone.
   // Always run through navigateTo (even for the default page) so pulse-mode
@@ -2009,6 +2017,13 @@ function initNav() {
   window.addEventListener('resize', () => {
     if (document.querySelector('main').classList.contains('pulse-mode')) updatePulseFitHeight();
   });
+  // Status pills wrap, so the header can change height as their text
+  // updates (e.g. "Last API success · 12s ago") without a window resize.
+  if ('ResizeObserver' in window) {
+    new ResizeObserver(() => {
+      if (document.querySelector('main').classList.contains('pulse-mode')) updatePulseFitHeight();
+    }).observe(document.querySelector('.topbar'));
+  }
 }
 
 
@@ -2039,7 +2054,7 @@ function initNav() {
     if (event.key === 'Escape' && body.classList.contains('nav-open')) setDrawer(false);
   });
   // Choosing a page closes the drawer; the page switch is the links' own handler.
-  sidebar.querySelectorAll('.rail-link').forEach((link) => link.addEventListener('click', () => {
+  sidebar.querySelectorAll('.rail-link, .home-link').forEach((link) => link.addEventListener('click', () => {
     if (mobile.matches) setDrawer(false);
   }));
   mobile.addEventListener('change', () => setDrawer(false));
