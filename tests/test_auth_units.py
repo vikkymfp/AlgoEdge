@@ -265,3 +265,65 @@ def test_sql_server_single_null_unique_rule_is_a_clear_error_not_an_outage(auth_
     with pytest.raises(ValueError, match="conflicts with an existing user"):
         auth_service.create_user(factory, email="two@example.com", mobile_no=None, password=PASSWORD,
                                  role="USER", clock=clock, min_length=8)
+
+
+# ---------------- same-origin check (login POST and state-changing requests) ----------------
+
+DASHBOARD_ORIGIN = "http://129.121.135.113:5181"
+
+
+def _request(*, host="129.121.135.113:5181", origin=DASHBOARD_ORIGIN, fetch_site=None, scheme="http"):
+    from starlette.requests import Request
+
+    headers = [(b"host", host.encode())]
+    if origin is not None:
+        headers.append((b"origin", origin.encode()))
+    if fetch_site is not None:
+        headers.append((b"sec-fetch-site", fetch_site.encode()))
+    return Request({"type": "http", "method": "POST", "scheme": scheme, "path": "/api/auth/login",
+                    "headers": headers, "query_string": b"", "server": ("129.121.135.113", 5181)})
+
+
+def test_matching_origin_without_sec_fetch_site_is_allowed() -> None:
+    # Chrome omits Sec-Fetch-Site on a plain-HTTP origin such as http://129.121.135.113:5181.
+    from algoedge.auth_routes import _same_origin
+
+    assert _same_origin(_request()) is True
+
+
+def test_matching_origin_with_same_origin_fetch_site_is_allowed() -> None:
+    from algoedge.auth_routes import _same_origin
+
+    assert _same_origin(_request(fetch_site="same-origin")) is True
+
+
+@pytest.mark.parametrize("fetch_site", ["cross-site", "same-site"])
+def test_cross_site_and_same_site_fetches_are_rejected(fetch_site) -> None:
+    from algoedge.auth_routes import _same_origin
+
+    assert _same_origin(_request(fetch_site=fetch_site)) is False
+    assert _same_origin(_request(origin=None, fetch_site=fetch_site)) is False
+
+
+@pytest.mark.parametrize("request_kwargs", [
+    {"origin": "http://evil.example"},
+    {"origin": "http://129.121.135.113:5182"},
+    {"origin": "https://129.121.135.113:5181"},
+    {"host": "127.0.0.1:5181"},      # a proxy forwarding its upstream Host instead of the browser's
+    {"host": "129.121.135.113"},     # a proxy forwarding Host without the port
+])
+def test_an_origin_that_does_not_match_scheme_and_host_is_rejected(request_kwargs) -> None:
+    from algoedge.auth_routes import _same_origin
+
+    assert _same_origin(_request(**request_kwargs)) is False
+    assert _same_origin(_request(fetch_site="same-origin", **request_kwargs)) is False
+
+
+def test_the_login_endpoint_accepts_the_dashboards_own_origin(auth_env, make_user) -> None:
+    client = TestClient(auth_env[0], base_url=DASHBOARD_ORIGIN)
+    make_user()
+    cid = client.get("/api/auth/captcha").json()["captchaId"]
+    response = client.post("/api/auth/login", headers={"Origin": DASHBOARD_ORIGIN},
+                           json={"identifier": "trader@example.com", "password": PASSWORD, "captchaId": cid,
+                                 "captcha": CAPTCHA_ANSWER})
+    assert response.status_code == 200

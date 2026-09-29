@@ -3,139 +3,210 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f6fa" />
+    <meta name="theme-color" content="#f5f7fb" />
     <title>AlgoEdge Grid Monitor</title>
     <link rel="icon" type="image/png" href="logo.png" />
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
     <div class="app-layout">
-      <aside class="sidebar" aria-label="Workspace navigation">
-        <nav class="rail-nav">
+      <aside class="sidebar" id="sidebar" aria-label="Workspace navigation">
+        <div class="sidebar-brand">
+          <span class="brand-logo-chip"><img src="logo.png" alt="AlgoEdge" class="brand-logo" /></span>
+          <button class="icon-button sidebar-close" id="navClose" type="button" aria-label="Close navigation">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        <nav class="rail-nav" aria-label="Pages">
+          <p class="rail-group-label">Markets</p>
           <a class="rail-link active" href="#market-pulse" title="Market pulse">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M3 17l5-5 4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 17l5-5 4 4 8-9" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <small>Pulse</small>
           </a>
-
-          <span class="rail-divider" aria-hidden="true"></span>
           <a class="rail-link" href="#backtest-panel" title="Backtesting">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 19V9M10 19V5M16 19v-7M22 19V3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <small>Backtest</small>
           </a>
 
-          <span class="rail-divider" aria-hidden="true"></span>
+          <p class="rail-group-label">Trading</p>
           <a class="rail-link" href="#trade-panel" title="Manual trading">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M4 17l5-9 4 5 3-4 4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 17l5-9 4 5 3-4 4 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <small>Trade</small>
           </a>
           <a class="rail-link" href="#positions-panel" title="Positions">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M3 3v18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 15l4-5 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 3v18h18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 15l4-5 3 3 5-7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <small>Positions</small>
           </a>
           <a class="rail-link" href="#orders-panel" title="Orders">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <small>Orders</small>
           </a>
-
-          <span class="rail-divider" aria-hidden="true"></span>
           <a class="rail-link" href="#auto-trading-panel" title="Auto trading">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="2"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4M4.9 19.1l2.8-2.8M16.3 7.7l2.8-2.8" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="12" r="3.5" stroke="currentColor" stroke-width="2"/></svg>
             <small>Auto</small>
           </a>
 
-          <span class="rail-divider" aria-hidden="true"></span>
+          <p class="rail-group-label">Insights</p>
           <a class="rail-link" href="#reports-panel" title="Reports">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M4 4h16v16H4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 16v-4M12 16V8M16 16v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4h16v16H4z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M8 16v-4M12 16V8M16 16v-7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <small>Reports</small>
           </a>
 
-          <span class="rail-divider" aria-hidden="true"></span>
+          <p class="rail-group-label">System</p>
           <a class="rail-link" href="#account-api" title="Broker Diagnostics">
-            <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/></svg>
             <small>Diagnostics</small>
           </a>
           <a class="rail-link" href="#broker-panel" title="API Management">
-            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="11" width="18" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2" stroke="currentColor" stroke-width="2"/><path d="M7 11V7a5 5 0 0110 0v4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
             <small>Broker</small>
           </a>
           <a class="rail-link" href="#system-health-panel" title="System health">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2-7 4 14 2-7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M3 12h4l2-7 4 14 2-7h6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <small>Health</small>
           </a>
-
-          <span class="rail-divider" aria-hidden="true"></span>
           <a class="rail-link" href="#grid-workspace" title="Grid workspace (experimental)">
-            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
             <small>Grids</small>
           </a>
         </nav>
+        <button class="sidebar-collapse" id="sidebarCollapse" type="button" aria-controls="sidebar" aria-expanded="true" title="Collapse sidebar">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Collapse</span>
+        </button>
       </aside>
+      <div class="nav-backdrop" id="navBackdrop" hidden></div>
       <div class="shell">
       <header class="topbar">
-        <a class="brand" href="." aria-label="AlgoEdge home">
-          <span class="brand-logo-chip"><img src="logo.png" alt="AlgoEdge" class="brand-logo" /></span>
-        </a>
-        <div class="topbar-actions">
-          <button class="connection-pill broker-pill" id="alertsPill" type="button" title="Open alerts" hidden>
-            <i></i><span id="alertsPillCount">0</span> alert(s)
+        <div class="topbar-start">
+          <button class="icon-button nav-toggle" id="navToggle" type="button" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
           </button>
-          <button class="connection-pill broker-pill" id="brokerStatusPill" type="button" title="Open API Management">
+          <a class="brand" href="." aria-label="AlgoEdge home">
+            <span class="brand-logo-chip"><img src="logo.png" alt="AlgoEdge" class="brand-logo" /></span>
+          </a>
+        </div>
+        <div class="topbar-status" role="group" aria-label="System status">
+          <button class="connection-pill broker-pill" id="brokerStatusPill" type="button" title="Broker connection - open API Management">
             <i></i>Checking Groww&hellip;
           </button>
           <span class="connection-pill" id="connectionPill"><i></i>Checking feed</span>
-          <button class="connection-pill broker-pill" id="autoStatusPill" type="button" title="Open Auto Trading">
+          <button class="connection-pill broker-pill" id="autoStatusPill" type="button" title="Auto trading status - open Auto Trading">
             <i></i>Auto Disabled
           </button>
+          <button class="connection-pill broker-pill alerts-pill" id="alertsPill" type="button" title="Unacknowledged alerts - open Reports" hidden>
+            <svg class="pill-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 16V11a6 6 0 0112 0v5l1.5 2h-15L6 16zM10 20a2 2 0 004 0" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            <span id="alertsPillCount">0</span> alert(s)
+          </button>
           <span class="sync-badge" id="syncBadge">3s auto-sync</span>
-          <span class="sync-badge" id="authUser" hidden></span>
-          <a class="connection-pill broker-pill" id="adminLink" href="admin.html" hidden>Admin</a>
-          <button class="connection-pill broker-pill" id="logoutButton" type="button" title="Sign out">Sign out</button>
+        </div>
+        <div class="topbar-actions">
           <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh live data" title="Refresh live data">
-            <svg viewBox="0 0 24 24" fill="none"><path d="M20 11a8 8 0 10-2.34 5.66M20 11V5m0 6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11a8 8 0 10-2.34 5.66M20 11V5m0 6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="user-chip" title="Signed-in user">
+            <svg class="user-chip-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" stroke="currentColor" stroke-width="2"/><path d="M4 20a8 8 0 0116 0" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <span class="user-chip-name" id="authUser" hidden></span>
+          </div>
+          <a class="admin-badge" id="adminLink" href="admin.html" hidden>Admin</a>
+          <button class="signout-button" id="logoutButton" type="button" title="Sign out">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 17l5-5-5-5M20 12H9M12 20H5a1 1 0 01-1-1V5a1 1 0 011-1h7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Sign out</span>
           </button>
         </div>
       </header>
       <button class="critical-banner" id="criticalBanner" type="button" hidden></button>
 
-      <main>
+      <main id="main-content" tabindex="-1">
         <section class="market-strip" id="market-pulse" aria-label="Live Indian indices">
-          <div class="section-heading compact">
-            <div><p class="eyebrow">Market pulse</p></div>
-            <span class="source-label" id="marketSource">Checking live feed</span>
+          <div class="page-heading">
+            <div>
+              <p class="eyebrow">Market overview</p>
+              <h1 class="page-title">Market Pulse</h1>
+            </div>
+            <div class="page-heading-meta">
+              <div class="system-status-row" role="group" aria-label="Data connections">
+                <div class="system-status-item" title="Groww API - required for manual/live orders">
+                  <span>Broker</span>
+                  <strong id="pulseBrokerStatus"><i class="status-dot"></i>Checking&hellip;</strong>
+                </div>
+                <div class="system-status-item" title="Yahoo Finance feed - independent of the broker connection">
+                  <span>Market data</span>
+                  <strong id="pulseMarketStatus"><i class="status-dot"></i>Checking&hellip;</strong>
+                </div>
+              </div>
+              <span class="source-label" id="marketSource">Checking live feed</span>
+            </div>
           </div>
 
-          <div class="system-status-row">
-            <div class="system-status-item">
-              <span>Broker connection</span>
-              <strong id="pulseBrokerStatus"><i class="status-dot"></i>Checking&hellip;</strong>
-              <small class="muted">Groww API - required for manual/live orders</small>
-            </div>
-            <div class="system-status-item">
-              <span>Market data connection</span>
-              <strong id="pulseMarketStatus"><i class="status-dot"></i>Checking&hellip;</strong>
-              <small class="muted">Yahoo Finance feed - independent of the broker connection above</small>
-            </div>
-          </div>
-
-          <div class="market-cards" id="marketCards"></div>
+          <div class="market-cards" id="marketCards" aria-live="polite"></div>
 
           <div class="chart-panel">
             <div class="chart-panel-heading">
-              <nav class="index-tabs" id="indexTabs" aria-label="Chart index"></nav>
-              <nav class="timeframe-tabs" id="timeframeTabs" aria-label="Chart timeframe"></nav>
+              <div class="chart-title">
+                <h2 id="chartTitle">NIFTY 50</h2>
+                <span class="chart-subtitle">Candlestick · live Yahoo Finance data</span>
+              </div>
+              <div class="chart-toolbar">
+                <nav class="index-tabs" id="indexTabs" aria-label="Chart index"></nav>
+                <nav class="timeframe-tabs" id="timeframeTabs" aria-label="Chart timeframe"></nav>
+              </div>
             </div>
             <div class="chart-frame">
               <div class="chart-container" id="chartContainer"></div>
               <p class="chart-empty" id="chartEmpty" hidden>No candle data returned for this timeframe.</p>
             </div>
-            <div class="strategy-bar" id="strategyBar">
-              <span class="strategy-action" id="strategyAction">—</span>
-              <span class="strategy-reason" id="strategyReason">Loading signal…</span>
-              <span class="strategy-metric">RSI(14) <strong id="strategyRsi">—</strong></span>
-              <span class="strategy-metric">EMA(20) <strong id="strategyEma">—</strong></span>
-              <span class="strategy-disclaimer">Signal only — no order is placed</span>
-            </div>
+          </div>
+
+          <div class="pulse-lower">
+            <article class="signal-card" id="strategyBar" aria-labelledby="signalCardTitle">
+              <header class="signal-card-header">
+                <div>
+                  <p class="eyebrow">Trading signal</p>
+                  <h2 id="signalCardTitle"><span class="strategy-action" id="strategyAction">—</span></h2>
+                </div>
+                <span class="signal-index" id="strategyIndexName">NIFTY 50</span>
+              </header>
+              <p class="strategy-reason" id="strategyReason">Loading signal…</p>
+              <dl class="signal-metrics">
+                <div>
+                  <dt>RSI(<span id="strategyRsiLength">14</span>)</dt>
+                  <dd><strong id="strategyRsi">—</strong><small id="strategyRsiNote"></small></dd>
+                </div>
+                <div>
+                  <dt>EMA(<span id="strategyEmaLength">20</span>)</dt>
+                  <dd><strong id="strategyEma">—</strong><small id="strategyEmaNote"></small></dd>
+                </div>
+                <div>
+                  <dt>Signal price</dt>
+                  <dd><strong id="strategyPrice">—</strong><small id="strategyTimeframe"></small></dd>
+                </div>
+              </dl>
+              <p class="strategy-disclaimer">Signal only · no order is placed</p>
+            </article>
+
+            <article class="stats-card" aria-labelledby="statsCardTitle">
+              <header class="signal-card-header">
+                <div>
+                  <p class="eyebrow">Market stats</p>
+                  <h2 id="statsCardTitle"><span id="statsIndexName">NIFTY 50</span></h2>
+                </div>
+                <span class="stats-status" id="statsStatus">—</span>
+              </header>
+              <dl class="stats-grid">
+                <div><dt>Current price</dt><dd id="statsPrice">—</dd></div>
+                <div><dt>Change</dt><dd id="statsChange">—</dd></div>
+                <div><dt>Change %</dt><dd id="statsChangePercent">—</dd></div>
+                <div><dt>Latest candle</dt><dd id="statsCandleTime">—</dd></div>
+                <div><dt>Candle open</dt><dd id="statsOpen">—</dd></div>
+                <div><dt>Candle high</dt><dd id="statsHigh">—</dd></div>
+                <div><dt>Candle low</dt><dd id="statsLow">—</dd></div>
+                <div><dt>Candle close</dt><dd id="statsClose">—</dd></div>
+              </dl>
+              <p class="strategy-disclaimer">Latest candle of the selected timeframe · as returned by the feed</p>
+            </article>
           </div>
         </section>
 

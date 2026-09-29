@@ -164,11 +164,22 @@ def _is_direct_loopback(request: Request) -> bool:
 
 
 def _same_origin(request: Request) -> bool:
-    """True unless the browser declared a different Origin (or a cross-site fetch)."""
+    """False for a request a browser marks as coming from another site.
+
+    - An Origin header, when sent, must equal exactly scheme://Host as this
+      app sees the request; any other Origin is refused.
+    - Sec-Fetch-Site "cross-site" or "same-site" is refused; "same-origin"
+      (or "none") is allowed.
+    - A missing Sec-Fetch-Site is allowed: browsers omit it on plain-HTTP
+      origins, and the Origin check above has already run.
+    """
     origin = request.headers.get("origin")
     if origin is not None and origin != f"{request.url.scheme}://{request.headers.get('host', '')}":
         return False
-    return request.headers.get("sec-fetch-site") not in ("cross-site", "same-site")
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is None:
+        return True
+    return fetch_site not in ("cross-site", "same-site")
 
 
 def _cookie_secure(request: Request, setting: str) -> bool:

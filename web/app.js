@@ -514,16 +514,57 @@ function renderMarket(indices, source) {
   updatePulseStatus();
   updateAutoGates();
   updateCriticalBanner();
+  lastMarketIndices = indices;
   document.querySelector('#marketCards').innerHTML = indices.map((index) => `
-    <article class="market-card ${index.status === 'LIVE' ? 'live' : ''}">
+    <article class="market-card ${index.status === 'LIVE' ? 'live' : ''}" aria-label="${index.name}">
       <div class="market-card-top">
         <div><strong>${index.name}</strong><small>${index.status === 'LIVE' ? 'Live · Yahoo Finance' : 'Market data unavailable'}</small></div>
-        <div class="market-change ${index.change >= 0 ? 'up' : 'down'}"><strong>${index.change == null ? '—' : `${index.change >= 0 ? '↗' : '↘'} ${signedPercent(index.changePercent || 0)}`}</strong><span>${index.change == null ? '—' : signedMoney(index.change)}</span></div>
+        <div class="market-change ${index.change >= 0 ? 'up' : 'down'}"><strong>${index.change == null ? '—' : `${index.change >= 0 ? '▲' : '▼'} ${signedPercent(index.changePercent || 0)}`}</strong></div>
       </div>
       <strong class="market-price">${money(index.price)}</strong>
+      <div class="market-change ${index.change >= 0 ? 'up' : 'down'}"><span>${index.change == null ? '—' : `${signedMoney(index.change)} today`}</span></div>
       <div class="market-chart">${sparkline(index.sparkline, index.change >= 0)}</div>
     </article>
   `).join('');
+  renderPulseStats();
+}
+
+// ---- Pulse market-stats card (presentation only) --------------------------
+// Shows values the page has ALREADY fetched - the /api/market summary of the
+// active chart index and the latest candle /api/market/candles returned for the
+// selected timeframe. Nothing here fetches, derives or calculates new data.
+let lastMarketIndices = [];
+let lastChartCandle = null;
+
+function setStat(id, text, tone) {
+  const el = document.querySelector(`#${id}`);
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('up', tone === 'up');
+  el.classList.toggle('down', tone === 'down');
+}
+
+function renderPulseStats() {
+  const index = lastMarketIndices.find((item) => item.id === activeIndexId);
+  const name = (CHART_INDICES.find((item) => item.id === activeIndexId) || {}).name || '—';
+  const title = document.querySelector('#statsIndexName');
+  if (title) title.textContent = name;
+  const status = document.querySelector('#statsStatus');
+  if (status) {
+    const live = index && index.status === 'LIVE';
+    status.textContent = index ? (live ? '● Live' : '○ Unavailable') : '—';
+    status.classList.toggle('live', Boolean(live));
+  }
+  const tone = index && index.change != null ? (index.change >= 0 ? 'up' : 'down') : null;
+  setStat('statsPrice', index ? money(index.price) : '—');
+  setStat('statsChange', index && index.change != null ? signedMoney(index.change) : '—', tone);
+  setStat('statsChangePercent', index && index.change != null ? signedPercent(index.changePercent || 0) : '—', tone);
+  const candle = lastChartCandle;
+  setStat('statsCandleTime', candle ? `${new Date(candle.time * 1000).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })} IST` : '—');
+  setStat('statsOpen', candle ? money(candle.open) : '—');
+  setStat('statsHigh', candle ? money(candle.high) : '—');
+  setStat('statsLow', candle ? money(candle.low) : '—');
+  setStat('statsClose', candle ? money(candle.close) : '—');
 }
 
 function sparkline(points, positive) {
@@ -1629,8 +1670,14 @@ function initChart() {
 
 function renderIndexTabs() {
   document.querySelector('#indexTabs').innerHTML = CHART_INDICES.map((index) => `
-    <button type="button" class="${index.id === activeIndexId ? 'active' : ''}" data-index-id="${index.id}">${index.name}</button>
+    <button type="button" class="${index.id === activeIndexId ? 'active' : ''}" aria-pressed="${index.id === activeIndexId}" data-index-id="${index.id}">${index.name}</button>
   `).join('');
+  const activeName = (CHART_INDICES.find((index) => index.id === activeIndexId) || {}).name || '';
+  ['#chartTitle', '#strategyIndexName'].forEach((selector) => {
+    const el = document.querySelector(selector);
+    if (el) el.textContent = activeName;
+  });
+  renderPulseStats();
   document.querySelectorAll('#indexTabs button').forEach((button) => button.addEventListener('click', () => {
     activeIndexId = button.dataset.indexId;
     renderIndexTabs();
@@ -1641,7 +1688,7 @@ function renderIndexTabs() {
 
 function renderTimeframeTabs() {
   document.querySelector('#timeframeTabs').innerHTML = CHART_TIMEFRAMES.map((frame) => `
-    <button type="button" class="${frame.id === activeTimeframe ? 'active' : ''}" data-timeframe="${frame.id}">${frame.label}</button>
+    <button type="button" class="${frame.id === activeTimeframe ? 'active' : ''}" aria-pressed="${frame.id === activeTimeframe}" data-timeframe="${frame.id}">${frame.label}</button>
   `).join('');
   document.querySelectorAll('#timeframeTabs button').forEach((button) => button.addEventListener('click', () => {
     activeTimeframe = button.dataset.timeframe;
@@ -1662,10 +1709,13 @@ async function loadCandles() {
     candleSeries.setData(candles);
     chart.timeScale().fitContent();
     emptyMessage.hidden = true;
+    lastChartCandle = candles[candles.length - 1];
   } catch {
     candleSeries.setData([]);
     emptyMessage.hidden = false;
+    lastChartCandle = null;
   }
+  renderPulseStats();
 }
 
 async function loadStrategySignal() {
@@ -1681,13 +1731,36 @@ async function loadStrategySignal() {
     reasonEl.textContent = signal.reason || '—';
     document.querySelector('#strategyRsi').textContent = signal.rsi == null ? '—' : signal.rsi.toFixed(1);
     document.querySelector('#strategyEma').textContent = signal.ema == null ? '—' : money(signal.ema);
+    renderSignalDetails(payload.config || {}, signal);
   } catch {
     actionEl.textContent = '—';
     actionEl.className = 'strategy-action';
     reasonEl.textContent = 'Signal unavailable';
     document.querySelector('#strategyRsi').textContent = '—';
     document.querySelector('#strategyEma').textContent = '—';
+    renderSignalDetails({}, {});
   }
+}
+
+// Presentation of the /api/strategy/signal response only: the configured RSI
+// band and EMA length come from that response's own `config`, and each note
+// just states where the returned value sits - no signal is derived here.
+function renderSignalDetails(config, signal) {
+  const text = (id, value) => { const el = document.querySelector(`#${id}`); if (el) el.textContent = value; };
+  if (config.rsiLength != null) text('strategyRsiLength', config.rsiLength);
+  if (config.emaLength != null) text('strategyEmaLength', config.emaLength);
+  let rsiNote = '';
+  if (signal.rsi != null && config.rsiLower != null && config.rsiUpper != null) {
+    rsiNote = signal.rsi >= config.rsiUpper ? `At/above ${config.rsiUpper}`
+      : signal.rsi <= config.rsiLower ? `At/below ${config.rsiLower}` : `Between ${config.rsiLower}–${config.rsiUpper}`;
+  }
+  text('strategyRsiNote', rsiNote);
+  let emaNote = '';
+  if (signal.ema != null && signal.price != null) emaNote = signal.price >= signal.ema ? 'Price above EMA' : 'Price below EMA';
+  text('strategyEmaNote', emaNote);
+  text('strategyPrice', signal.price == null ? '—' : money(signal.price));
+  const frame = CHART_TIMEFRAMES.find((item) => item.id === activeTimeframe);
+  text('strategyTimeframe', frame ? `${frame.label} candles` : '');
 }
 
 let tradeIndexId = CHART_INDICES[0].id;
@@ -1951,6 +2024,51 @@ function initNav() {
 }
 
 document.querySelector('#refreshButton').addEventListener('click', refreshAll);
+
+(function initResponsiveNav() {
+  const body = document.body;
+  const sidebar = document.querySelector('#sidebar');
+  const toggle = document.querySelector('#navToggle');
+  const close = document.querySelector('#navClose');
+  const backdrop = document.querySelector('#navBackdrop');
+  const collapse = document.querySelector('#sidebarCollapse');
+  if (!sidebar || !toggle) return;
+  const mobile = window.matchMedia('(max-width: 640px)');
+
+  function setDrawer(open) {
+    body.classList.toggle('nav-open', open);
+    backdrop.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+    if (open) {
+      (sidebar.querySelector('.rail-link.active') || sidebar.querySelector('.rail-link'))?.focus();
+    } else if (sidebar.contains(document.activeElement)) {
+      toggle.focus();
+    }
+  }
+  toggle.addEventListener('click', () => setDrawer(!body.classList.contains('nav-open')));
+  close?.addEventListener('click', () => setDrawer(false));
+  backdrop.addEventListener('click', () => setDrawer(false));
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && body.classList.contains('nav-open')) setDrawer(false);
+  });
+  // Choosing a page closes the drawer; the page switch is the links' own handler.
+  sidebar.querySelectorAll('.rail-link').forEach((link) => link.addEventListener('click', () => {
+    if (mobile.matches) setDrawer(false);
+  }));
+  mobile.addEventListener('change', () => setDrawer(false));
+
+  // Desktop: optional collapsed rail, remembered per browser (a convenience only).
+  function setCollapsed(collapsed) {
+    body.classList.toggle('sidebar-collapsed', collapsed);
+    collapse?.setAttribute('aria-expanded', String(!collapsed));
+    if (collapse) collapse.title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    try { localStorage.setItem('algoedge.sidebarCollapsed', collapsed ? '1' : '0'); } catch { /* storage unavailable */ }
+  }
+  let saved = false;
+  try { saved = localStorage.getItem('algoedge.sidebarCollapsed') === '1'; } catch { /* storage unavailable */ }
+  if (saved) setCollapsed(true);
+  collapse?.addEventListener('click', () => setCollapsed(!body.classList.contains('sidebar-collapsed')));
+})();
 function brokerConnectionTagClass(connectionStatus) {
   if (connectionStatus === 'CONNECTED') return '';
   if (connectionStatus === 'MISSING') return 'danger';
