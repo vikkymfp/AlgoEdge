@@ -1,3 +1,69 @@
+// ---- Sign-in (server: algoedge.auth_routes) --------------------------------
+// The session is an HttpOnly cookie the browser sends by itself. This wrapper
+// only adds the session's CSRF token (held in memory - never localStorage) to
+// same-origin state-changing requests, and returns to the sign-in page when
+// the server answers 401. Authorization is decided on the server; the UI only
+// mirrors it.
+const authSession = (() => {
+  const nativeFetch = window.fetch.bind(window);
+  let csrfToken = null;
+  const ready = nativeFetch('/api/auth/me', { headers: { Accept: 'application/json' }, cache: 'no-store' })
+    .then(async (response) => {
+      if (response.status === 401) {
+        window.location.replace('/login.html');
+        return null;
+      }
+      if (!response.ok) return null;
+      const data = await response.json();
+      csrfToken = data.csrfToken;
+      return data.user;
+    })
+    .catch(() => null);
+
+  window.fetch = async (input, init = {}) => {
+    const url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+    const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+    const sameOrigin = url.origin === window.location.origin;
+    let options = init;
+    if (sameOrigin && !['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+      await ready;
+      const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+      if (csrfToken) headers.set('X-CSRF-Token', csrfToken);
+      options = { ...init, headers };
+    }
+    const response = await nativeFetch(input, options);
+    if (response.status === 401 && sameOrigin && url.pathname.startsWith('/api/')) {
+      window.location.replace('/login.html');
+    }
+    return response;
+  };
+
+  ready.then((user) => {
+    if (!user) return;
+    const label = document.getElementById('authUser');
+    if (label) {
+      label.textContent = `${user.email || user.mobileNo} · ${user.role}`;
+      label.hidden = false;
+    }
+    const adminLink = document.getElementById('adminLink');
+    if (adminLink) adminLink.hidden = user.role !== 'ADMIN';
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    const button = document.getElementById('logoutButton');
+    if (!button) return;
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        await window.fetch('/api/auth/logout', { method: 'POST', headers: { Accept: 'application/json' } });
+      } finally {
+        window.location.replace('/login.html');
+      }
+    });
+  });
+  return { ready };
+})();
+
 const demoGrids = [
   {
     id: 'delta-01', name: 'Delta 01', symbol: 'RELIANCE', description: 'RELIANCE · NSE · Cash delivery', status: 'RUNNING', source: 'PAPER SNAPSHOT',

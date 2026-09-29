@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="same-origin" />
+    <title>Sign in · AlgoEdge</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link rel="stylesheet" href="auth.css" />
+  </head>
+  <body class="auth-body">
+    <main class="auth-shell">
+      <section class="auth-card" aria-labelledby="loginTitle">
+        <div class="auth-brand">
+          <span class="auth-logo-chip"><img src="logo.png" alt="" class="auth-logo" /></span>
+          <div>
+            <p class="auth-eyebrow">AlgoEdge</p>
+            <h1 id="loginTitle">Sign in to your dashboard</h1>
+          </div>
+        </div>
+
+        <form id="loginForm" class="auth-form" novalidate>
+          <div class="field">
+            <label for="identifier">Email or Mobile Number</label>
+            <input id="identifier" name="identifier" type="text" inputmode="email" autocomplete="username"
+                   autocapitalize="none" spellcheck="false" maxlength="254" required />
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+            <div class="input-with-button">
+              <input id="password" name="password" type="password" autocomplete="current-password"
+                     maxlength="1024" required />
+              <button type="button" id="togglePassword" class="ghost-button" aria-controls="password"
+                      aria-pressed="false">Show</button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="captcha">Security code</label>
+            <div class="captcha-row">
+              <img id="captchaImage" class="captcha-image" alt="Security code image (6 letters and digits)"
+                   width="208" height="52" />
+              <button type="button" id="refreshCaptcha" class="ghost-button" aria-label="Get a new security code">
+                Refresh
+              </button>
+            </div>
+            <input id="captcha" name="captcha" type="text" autocomplete="off" autocapitalize="characters"
+                   spellcheck="false" maxlength="6" pattern="[A-Za-z0-9]{6}" required
+                   aria-describedby="captchaHint" />
+            <small id="captchaHint" class="hint">Enter the 6 characters shown (A–Z, 0–9).</small>
+          </div>
+
+          <p id="formMessage" class="form-message" role="alert" aria-live="assertive" hidden></p>
+
+          <button type="submit" id="loginButton" class="primary-button">
+            <span class="button-label">Sign in</span>
+          </button>
+        </form>
+
+        <p class="auth-footnote">Paper / research access only. Sign-in never enables live trading.</p>
+      </section>
+    </main>
+    <script src="login.js"></script>
+  </body>
+</html>

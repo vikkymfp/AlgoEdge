@@ -47,6 +47,28 @@ class Settings(BaseSettings):
     cost_gst_percent: float = 0.0
     cost_stamp_duty_percent_on_buy: float = 0.0
 
+    # Dashboard sign-in (algoedge.auth_*). Access control only - none of
+    # these touch trading, risk or the paper/live switch above.
+    auth_password_min_length: int = 8
+    auth_lockout_threshold: int = 5  # failed passwords before a temporary lock
+    auth_lockout_minutes: int = 15
+    auth_session_idle_minutes: int = 30
+    auth_session_absolute_minutes: int = 480
+    # How often an active session re-reads its user row (deactivation / role change).
+    auth_session_revalidate_seconds: int = 60
+    auth_captcha_ttl_seconds: int = 120
+    auth_captcha_rate_limit: int = 60  # CAPTCHAs issued per client IP per window
+    auth_captcha_rate_window_seconds: int = 300
+    auth_login_rate_limit: int = 20  # login attempts per client IP per window
+    auth_login_rate_window_seconds: int = 300
+    # "auto": Secure cookie when the request arrived over HTTPS; "true"/"false" force it.
+    auth_cookie_secure: str = "auto"
+    # Optional loopback read-only exemption (status/alerts/option-context GETs
+    # from a direct 127.0.0.1 connection with no proxy headers). Off here: this
+    # codebase has no credential-less tooling that needs it (the Phase 8
+    # collector branch enables it).
+    auth_loopback_readonly_exempt: bool = False
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_prefix="ALGOEDGE_",
