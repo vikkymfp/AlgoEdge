@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="same-origin" />
+    <title>Administration · AlgoEdge</title>
+    <link rel="icon" type="image/png" href="logo.png" />
+    <link rel="stylesheet" href="auth.css" />
+  </head>
+  <body class="auth-body">
+    <div class="admin-shell">
+      <header class="admin-header">
+        <div class="auth-brand">
+          <span class="auth-logo-chip"><img src="logo.png" alt="" class="auth-logo" /></span>
+          <div>
+            <p class="auth-eyebrow">AlgoEdge · Administration</p>
+            <h1>Access &amp; login activity</h1>
+          </div>
+        </div>
+        <div class="actions">
+          <span id="whoami" class="hint"></span>
+          <a href="/">Dashboard</a>
+          <button type="button" id="logoutButton" class="ghost-button">Sign out</button>
+        </div>
+      </header>
+
+      <p id="adminMessage" class="form-message" role="alert" aria-live="polite" hidden></p>
+
+      <section class="admin-panel" aria-labelledby="activityTitle">
+        <h2 id="activityTitle">Login activity</h2>
+        <form id="activityFilters" class="filters">
+          <div class="field"><label for="fStart">From (IST date)</label><input id="fStart" type="date" /></div>
+          <div class="field"><label for="fEnd">To (IST date)</label><input id="fEnd" type="date" /></div>
+          <div class="field">
+            <label for="fSuccess">Result</label>
+            <select id="fSuccess"><option value="">All</option><option value="true">Success</option><option value="false">Failure</option></select>
+          </div>
+          <div class="field">
+            <label for="fType">Identifier type</label>
+            <select id="fType"><option value="">All</option><option value="EMAIL">Email</option><option value="MOBILE">Mobile</option></select>
+          </div>
+          <div class="field">
+            <label for="fReason">Failure reason</label>
+            <select id="fReason">
+              <option value="">All</option>
+              <option>INVALID_CAPTCHA</option><option>INVALID_PASSWORD</option><option>INVALID_CREDENTIALS</option>
+              <option>ACCOUNT_LOCKED</option><option>ACCOUNT_DISABLED</option><option>RATE_LIMITED</option>
+            </select>
+          </div>
+          <div class="field"><label for="fUser">User</label><select id="fUser"><option value="">All users</option></select></div>
+          <button type="submit" class="primary-button">Apply</button>
+        </form>
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">Date / time (IST)</th><th scope="col">User</th><th scope="col">Identifier</th>
+                <th scope="col">Type</th><th scope="col">Result</th><th scope="col">Failure reason</th>
+                <th scope="col">IP address</th><th scope="col">User agent</th><th scope="col">Session</th>
+              </tr>
+            </thead>
+            <tbody id="activityBody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span id="activityCount"></span>
+          <button type="button" id="prevPage" class="ghost-button">Previous</button>
+          <button type="button" id="nextPage" class="ghost-button">Next</button>
+        </div>
+      </section>
+
+      <section class="admin-panel" aria-labelledby="usersTitle">
+        <h2 id="usersTitle">Users</h2>
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead>
+              <tr>
+                <th scope="col">ID</th><th scope="col">Email</th><th scope="col">Mobile</th><th scope="col">Role</th>
+                <th scope="col">Status</th><th scope="col">Last sign-in</th><th scope="col">Locked until</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="usersBody"></tbody>
+          </table>
+        </div>
+        <form id="createUserForm" class="create-user" autocomplete="off">
+          <div class="field"><label for="newEmail">Email</label><input id="newEmail" type="email" maxlength="254" /></div>
+          <div class="field"><label for="newMobile">Mobile</label><input id="newMobile" type="tel" maxlength="20" /></div>
+          <div class="field">
+            <label for="newRole">Role</label>
+            <select id="newRole"><option>USER</option><option>ADMIN</option></select>
+          </div>
+          <div class="field">
+            <label for="newPassword">Initial password</label>
+            <input id="newPassword" type="password" autocomplete="new-password" minlength="8" maxlength="256" />
+          </div>
+          <button type="submit" class="primary-button">Add user</button>
+        </form>
+      </section>
+    </div>
+    <script src="admin.js"></script>
+  </body>
+</html>

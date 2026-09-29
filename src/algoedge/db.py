@@ -161,6 +161,13 @@ def is_available() -> bool:
     return _session_factory is not None
 
 
+def get_session_factory() -> sessionmaker | None:
+    """The app's one session factory (None when no database is configured),
+    for callers that must fail closed rather than skip persistence -
+    authentication (algoedge.auth_service) never signs anyone in without it."""
+    return _session_factory
+
+
 _last_successful_check_at: datetime | None = None
 
 

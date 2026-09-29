@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
-from algoedge import alerts, collector_reports, db, exit_reasons
+from algoedge import alerts, auth_routes, collector_reports, db, exit_reasons
 from algoedge.auto_trader import (
     REASON_EXIT_WITHOUT_POSITION,
     REASON_MISSED_SQUARE_OFF_WAITING_PREFIX,
@@ -175,6 +175,8 @@ def _resolve_auto_trade_contract(index_id: str, event) -> OptionContract | None:
 
 
 app = FastAPI()
+# Sign-in and server-side authorization for every route below (see auth_routes).
+auth_routes.install(app)
 
 
 @app.get("/api/grids")
