@@ -177,16 +177,6 @@ def _resolve_auto_trade_contract(index_id: str, event) -> OptionContract | None:
 app = FastAPI()
 
 
-@app.get("/api/grids")
-def grids() -> dict:
-    try:
-        return service.snapshot()
-    except BrokerNotConnectedError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
-    except (GrowwAPIException, KeyError, OSError, TypeError, ValueError) as error:
-        raise HTTPException(status_code=502, detail="Live broker data unavailable") from error
-
-
 @app.get("/api/positions")
 def positions() -> dict:
     try:

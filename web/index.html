@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#f5f6fa" />
-    <title>AlgoEdge Grid Monitor</title>
+    <title>AlgoEdge</title>
     <link rel="icon" type="image/png" href="logo.png" />
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
@@ -64,11 +64,6 @@
             <small>Health</small>
           </a>
 
-          <span class="rail-divider" aria-hidden="true"></span>
-          <a class="rail-link" href="#grid-workspace" title="Grid workspace (experimental)">
-            <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="2"/></svg>
-            <small>Grids</small>
-          </a>
         </nav>
       </aside>
       <div class="shell">
@@ -134,86 +129,6 @@
               <span class="strategy-disclaimer">Signal only — no order is placed</span>
             </div>
           </div>
-        </section>
-
-        <section id="grid-workspace" hidden>
-          <div class="experimental-banner">
-            <span class="status-tag warning">EXPERIMENTAL</span>
-            <p>Grid trading on cash-delivery equities is not part of AlgoEdge's production NIFTY/BANK NIFTY/SENSEX F&amp;O strategy below and is shown as demo/paper data only. It is not wired to real risk controls, reconciliation, or the Auto Trading engine.</p>
-          </div>
-          <nav class="grid-tabs" id="gridTabs" aria-label="Grid pages"></nav>
-
-        <section class="grid-overview">
-          <div class="grid-title-block">
-            <div class="instrument-icon">R</div>
-            <div>
-              <div class="title-line">
-                <h2 id="gridName">Delta 01</h2>
-                <span class="status-tag" id="gridStatus">RUNNING</span>
-              </div>
-              <p id="gridDescription">RELIANCE · NSE · Cash delivery</p>
-            </div>
-          </div>
-          <div class="overview-metrics">
-            <div><span>Grid range</span><strong id="gridRange">₹2,740 — ₹3,020</strong></div>
-            <div><span>Spacing</span><strong id="gridSpacing">₹20.00</strong></div>
-            <div><span>Realized today</span><strong class="positive" id="realizedPnl">+₹8,460.00</strong></div>
-          </div>
-        </section>
-
-        <section class="position-section">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">Position truth</p>
-              <h2>Real Delta position</h2>
-            </div>
-            <span class="source-label" id="sourceLabel">PAPER SNAPSHOT</span>
-          </div>
-          <div class="position-grid">
-            <article class="metric-card featured">
-              <span>Position size</span>
-              <strong id="positionSize">320 <small>shares</small></strong>
-              <em id="positionSide">LONG</em>
-            </article>
-            <article class="metric-card">
-              <span>Average entry</span>
-              <strong id="averageEntry">₹2,864.50</strong>
-              <small class="muted">weighted fill price</small>
-            </article>
-            <article class="metric-card">
-              <span>Mark price</span>
-              <strong id="markPrice">₹2,918.25</strong>
-              <small class="positive" id="markMove">+1.88% from entry</small>
-            </article>
-            <article class="metric-card pnl-card">
-              <span>Unrealized P&amp;L</span>
-              <strong class="positive" id="unrealizedPnl">+₹17,200.00</strong>
-              <small class="positive" id="pnlPercent">+1.88%</small>
-            </article>
-            <article class="metric-card risk-card">
-              <span>Liquidation price</span>
-              <strong id="liquidationPrice">₹2,486.00</strong>
-              <small class="warning" id="liqDistance">14.81% buffer to mark</small>
-            </article>
-          </div>
-        </section>
-
-        <section class="grid-health-section">
-          <div class="panel-heading">
-            <div>
-              <p class="eyebrow">Demo grid &middot; paper data</p>
-              <h2>Grid health</h2>
-            </div>
-          </div>
-          <div class="health-score"><strong id="healthScore">—</strong><span>% health</span></div>
-          <div class="health-bar"><span id="healthBar"></span></div>
-          <dl class="health-list">
-            <div><dt>Position utilization</dt><dd id="utilization">—</dd></div>
-            <div><dt>Open order notional</dt><dd id="orderNotional">—</dd></div>
-            <div><dt>Next grid trigger</dt><dd id="nextTrigger">—</dd></div>
-          </dl>
-          <div class="risk-note"><span>!</span><p id="riskMessage"></p></div>
-        </section>
         </section>
 
         <section class="panel trade-panel" id="trade-panel" aria-label="Manual trading" hidden>

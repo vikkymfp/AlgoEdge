@@ -1,5 +1,3 @@
-import json
-
 import pandas as pd
 from growwapi.groww.exceptions import GrowwAPIException
 
@@ -204,7 +202,7 @@ def test_payload_returns_empty_list_for_unexpected_shape() -> None:
     assert LiveGridService._payload({"payload": "unexpected"}) == []
 
 
-def test_normalize_order_maps_broker_fields_and_grid_level() -> None:
+def test_normalize_order_maps_broker_fields() -> None:
     service = make_service()
     order = {
         "order_reference_id": "ref-1",
@@ -215,14 +213,13 @@ def test_normalize_order_maps_broker_fields_and_grid_level() -> None:
         "order_status": "open",
     }
 
-    normalized = service._normalize_order(order, ledger={"ref-1": 100})
+    normalized = service._normalize_order(order)
 
     assert normalized == {
         "symbol": "RELIANCE",
         "side": "BUY",
         "quantity": 5.0,
         "actualPrice": 101.5,
-        "gridLevel": 100,
         "status": "OPEN",
     }
 
@@ -231,10 +228,9 @@ def test_normalize_order_falls_back_to_average_fill_price() -> None:
     service = make_service()
     order = {"average_fill_price": "99.0", "order_status": "filled"}
 
-    normalized = service._normalize_order(order, ledger={})
+    normalized = service._normalize_order(order)
 
     assert normalized["actualPrice"] == 99.0
-    assert normalized["gridLevel"] is None
 
 
 def test_position_computes_side_and_unrealized_pnl(monkeypatch) -> None:
@@ -280,31 +276,6 @@ def test_position_marks_short_for_negative_quantity(monkeypatch) -> None:
 
     assert result["side"] == "SHORT"
     assert result["ltp"] is None
-
-
-def test_load_ledger_returns_empty_dict_when_file_missing(tmp_path) -> None:
-    service = make_service()
-    service.order_ledger_path = tmp_path / "missing.json"
-
-    assert service._load_ledger() == {}
-
-
-def test_load_ledger_returns_empty_dict_on_invalid_json(tmp_path) -> None:
-    service = make_service()
-    ledger_path = tmp_path / "grid_orders.json"
-    ledger_path.write_text("not json", encoding="utf-8")
-    service.order_ledger_path = ledger_path
-
-    assert service._load_ledger() == {}
-
-
-def test_load_ledger_reads_valid_json(tmp_path) -> None:
-    service = make_service()
-    ledger_path = tmp_path / "grid_orders.json"
-    ledger_path.write_text(json.dumps({"ref-1": 100}), encoding="utf-8")
-    service.order_ledger_path = ledger_path
-
-    assert service._load_ledger() == {"ref-1": 100}
 
 
 def test_account_snapshot_source_reflects_total_failure_not_a_fixed_label() -> None:
