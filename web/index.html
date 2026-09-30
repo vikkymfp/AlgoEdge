@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f5f6fa" />
+    <meta name="theme-color" content="#0b1538" />
     <title>AlgoEdge</title>
     <link rel="icon" type="image/png" href="logo.png" />
     <link rel="stylesheet" href="styles.css" />
@@ -195,7 +195,7 @@
             </div>
           </div>
 
-          <button class="text-button-solid" type="button" id="tradePreviewButton">Preview order</button>
+          <button class="text-button-solid primary" type="button" id="tradePreviewButton">Preview order</button>
 
           <div class="trade-preview" id="tradePreview">
             <p class="data-empty">Preview an order to see the resolved contract before placing anything.</p>
@@ -245,7 +245,7 @@
                 <i class="status-dot"></i>
                 <strong id="posBrokerConnLabel">Checking&hellip;</strong>
               </span>
-              <span class="status-tag" id="posBrokerSourceTag">LIVE BROKER DATA</span>
+              <span class="status-tag info" id="posBrokerSourceTag">LIVE BROKER DATA</span>
               <span class="text-faint-note" id="posBrokerLastSync">Last sync —</span>
               <span class="broker-mini-view">View <svg class="chevron" viewBox="0 0 24 24" fill="none"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
             </button>
@@ -285,7 +285,7 @@
             </table>
           </div>
           <div class="compact-empty-state" id="positionsEmptyState" hidden>
-            <span class="status-tag">FLAT</span>
+            <span class="status-tag neutral">FLAT</span>
             <p>No open positions right now.</p>
           </div>
 
@@ -316,7 +316,7 @@
               <p class="eyebrow">DB orders vs live Groww positions</p>
               <h2>Position reconciliation</h2>
             </div>
-            <span class="status-tag" id="reconcileStatusTag">Checking&hellip;</span>
+            <span class="status-tag neutral" id="reconcileStatusTag">Checking&hellip;</span>
           </div>
           <div class="broker-result" id="reconcileGateBanner" hidden></div>
           <div class="auto-controls" id="reconcileOverrideControls" hidden>
@@ -442,7 +442,7 @@
             <div class="auto-status-line">
               <span class="auto-status-dot" id="autoStatusDot"></span>
               <span>Status:</span>
-              <span class="status-tag" id="autoEnabledTag">DISABLED</span>
+              <span class="status-tag neutral" id="autoEnabledTag">DISABLED</span>
               <span class="status-tag danger" id="autoLossHaltTag" hidden>CONSECUTIVE LOSS HALT</span>
             </div>
             <div class="auto-controls">
@@ -472,7 +472,7 @@
           <p class="text-faint-note" id="optSignalAsOf"></p>
           <div class="option-leg-grid">
             <article class="option-leg-card call">
-              <div class="option-leg-heading"><span class="status-tag">CALL</span><span class="option-leg-signal" id="optCallSignal">—</span></div>
+              <div class="option-leg-heading"><span class="status-tag info">CALL</span><span class="option-leg-signal" id="optCallSignal">—</span></div>
               <h3 id="optCallSymbol">—</h3>
               <div class="option-leg-premium"><span>Premium</span><strong id="optCallPremium">—</strong></div>
               <div class="option-leg-bidask">
@@ -487,7 +487,7 @@
               </div>
             </article>
             <article class="option-leg-card put">
-              <div class="option-leg-heading"><span class="status-tag">PUT</span><span class="option-leg-signal" id="optPutSignal">—</span></div>
+              <div class="option-leg-heading"><span class="status-tag neutral">PUT</span><span class="option-leg-signal" id="optPutSignal">—</span></div>
               <h3 id="optPutSymbol">—</h3>
               <div class="option-leg-premium"><span>Premium</span><strong id="optPutPremium">—</strong></div>
               <div class="option-leg-bidask">
@@ -731,27 +731,27 @@
           <div class="api-panels">
             <div class="api-column">
               <details class="api-panel" open>
-                <summary>Connection &amp; Permissions <span class="status-tag" id="diagProfileTag"></span></summary>
+                <summary>Connection &amp; Permissions <span class="status-tag neutral" id="diagProfileTag"></span></summary>
                 <div id="profileData"></div>
               </details>
               <details class="api-panel">
-                <summary>Holdings &amp; Positions <span id="holdingsPositionsCount">0</span> <span class="status-tag" id="diagHoldingsPositionsTag"></span></summary>
+                <summary>Holdings &amp; Positions <span id="holdingsPositionsCount">0</span> <span class="status-tag neutral" id="diagHoldingsPositionsTag"></span></summary>
                 <div id="holdingsPositionsData"></div>
               </details>
               <details class="api-panel">
-                <summary>Instrument Master &amp; Market Data <span class="status-tag" id="diagInstrumentTag"></span></summary>
+                <summary>Instrument Master &amp; Market Data <span class="status-tag neutral" id="diagInstrumentTag"></span></summary>
                 <div id="instrumentMarketData"></div>
               </details>
             </div>
             <div class="api-column">
               <details class="api-panel" open>
-                <summary>Funds &amp; Margin <span class="status-tag" id="diagMarginTag"></span></summary>
+                <summary>Funds &amp; Margin <span class="status-tag neutral" id="diagMarginTag"></span></summary>
                 <div id="marginData"></div>
               </details>
             </div>
           </div>
           <details class="api-panel api-panel-full">
-            <summary>Orders &amp; Trades <span id="ordersDataCount">0</span> <span class="status-tag" id="diagOrdersTag"></span></summary>
+            <summary>Orders &amp; Trades <span id="ordersDataCount">0</span> <span class="status-tag neutral" id="diagOrdersTag"></span></summary>
             <div id="ordersData"></div>
           </details>
         </section>
@@ -762,7 +762,7 @@
               <p class="eyebrow">API key &amp; secret, and the session generated from them</p>
               <h2>API Management</h2>
             </div>
-            <span class="status-tag" id="brokerConnectionTag">CHECKING</span>
+            <span class="status-tag neutral" id="brokerConnectionTag">CHECKING</span>
           </div>
 
           <div class="panel-heading reconcile-heading">
@@ -774,7 +774,7 @@
             <dt>Session source</dt><dd id="brokerAuthMode">—</dd>
           </dl>
           <div class="auto-controls">
-            <button class="text-button-solid" type="button" id="brokerUpdateCredentialsButton">Update API key &amp; secret</button>
+            <button class="text-button-solid primary" type="button" id="brokerUpdateCredentialsButton">Update API key &amp; secret</button>
             <button class="text-button-solid" type="button" id="brokerReauthButton" hidden>Re-authenticate now</button>
             <button class="text-button-solid" type="button" id="brokerTestConnectionButton">Test connection</button>
             <button class="text-button" type="button" id="brokerUpdateTokenButton">Use a session token instead (advanced)</button>
@@ -788,7 +788,7 @@
               <small>Only for keys that can't generate sessions from a secret (e.g. TOTP keys). A pasted session expires with Groww's daily reset and is not renewed automatically - an API key &amp; secret is preferred.</small>
             </div>
             <div class="broker-form-actions">
-              <button class="text-button-solid" type="submit" id="brokerTokenSubmit">Validate &amp; save</button>
+              <button class="text-button-solid primary" type="submit" id="brokerTokenSubmit">Validate &amp; save</button>
               <button class="text-button" type="button" id="brokerTokenCancel">Cancel</button>
             </div>
           </form>
@@ -803,7 +803,7 @@
               <input type="password" id="brokerApiSecretInput" autocomplete="off" placeholder="API secret" />
             </div>
             <div class="broker-form-actions">
-              <button class="text-button-solid" type="submit" id="brokerCredentialsSubmit">Validate &amp; save</button>
+              <button class="text-button-solid primary" type="submit" id="brokerCredentialsSubmit">Validate &amp; save</button>
               <button class="text-button" type="button" id="brokerCredentialsCancel">Cancel</button>
             </div>
           </form>
@@ -906,7 +906,7 @@
                   <button type="button" class="segmented-option" data-mode="split">Train / Validation / OOS</button>
                 </div>
               </div>
-              <button class="text-button-solid backtest-run-button" type="button" id="backtestRunButton">Run Backtest</button>
+              <button class="text-button-solid primary backtest-run-button" type="button" id="backtestRunButton">Run Backtest</button>
             </div>
             <div class="backtest-meta-row" id="backtestMetaRow" hidden>
               <span><strong>Symbol</strong><em id="backtestMetaSymbol">&mdash;</em></span>

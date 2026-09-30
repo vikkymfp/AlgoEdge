@@ -441,7 +441,8 @@ function sparkline(points, positive) {
   const height = 48;
   const spread = maximum - minimum || 1;
   const polyline = points.map((point, index) => `${(index / (points.length - 1)) * width},${height - ((point - minimum) / spread) * height}`).join(' ');
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><polyline class="${positive ? 'line-up' : 'line-down'}" points="${polyline}" /></svg>`;
+  const direction = positive ? 'up' : 'down';
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><polygon class="area-${direction}" points="0,${height} ${polyline} ${width},${height}" /><polyline class="line-${direction}" points="${polyline}" /></svg>`;
 }
 
 function renderPositionsSummaryStrip(positions) {
@@ -451,7 +452,7 @@ function renderPositionsSummaryStrip(positions) {
   document.querySelector('#summaryExposure').textContent = money(exposure);
   const unrealizedEl = document.querySelector('#summaryUnrealizedPnl');
   unrealizedEl.textContent = positions.length === 0 ? '—' : signedMoney(unrealizedTotal);
-  unrealizedEl.className = positions.length === 0 ? '' : unrealizedTotal >= 0 ? 'positive' : 'warning';
+  unrealizedEl.className = positions.length === 0 ? '' : unrealizedTotal >= 0 ? 'positive' : 'negative';
 }
 
 function renderPositionsTable(positions) {
@@ -473,8 +474,8 @@ function renderPositionsTable(positions) {
       <td class="mono">${number(position.quantity)}</td>
       <td class="mono">${money(position.averagePrice)}</td>
       <td class="mono">${money(position.ltp)}</td>
-      <td class="mono ${position.unrealizedPnl >= 0 ? 'positive' : ''}">${signedMoney(position.unrealizedPnl)}</td>
-      <td class="mono ${position.realizedPnl >= 0 ? 'positive' : ''}">${signedMoney(position.realizedPnl)}</td>
+      <td class="mono ${position.unrealizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(position.unrealizedPnl)}</td>
+      <td class="mono ${position.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(position.realizedPnl)}</td>
     </tr>
   `).join('');
 }
@@ -500,11 +501,11 @@ function renderPnl(payload) {
 
   const totalEl = document.querySelector('#pnlTotalRealized');
   totalEl.textContent = signedMoney(realized.total);
-  totalEl.className = realized.total >= 0 ? 'positive' : 'warning';
+  totalEl.className = realized.total >= 0 ? 'positive' : 'negative';
 
   const summaryRealizedEl = document.querySelector('#summaryRealizedPnl');
   summaryRealizedEl.textContent = signedMoney(realized.total);
-  summaryRealizedEl.className = realized.total >= 0 ? 'positive' : 'warning';
+  summaryRealizedEl.className = realized.total >= 0 ? 'positive' : 'negative';
 
   document.querySelector('#pnlLiveRealized').textContent = signedMoney(realized.live);
   document.querySelector('#pnlPaperRealized').textContent = signedMoney(realized.paper);
@@ -515,7 +516,7 @@ function renderPnl(payload) {
     paperUnrealizedEl.className = '';
   } else {
     paperUnrealizedEl.textContent = signedMoney(unrealized.paper);
-    paperUnrealizedEl.className = unrealized.paper >= 0 ? 'positive' : 'warning';
+    paperUnrealizedEl.className = unrealized.paper >= 0 ? 'positive' : 'negative';
   }
 
   document.querySelector('#pnlLiveUnrealizedNote').textContent =
@@ -523,7 +524,7 @@ function renderPnl(payload) {
 
   const netEl = document.querySelector('#pnlNetTotal');
   netEl.textContent = signedMoney(realized.netTotal);
-  netEl.className = realized.netTotal >= 0 ? 'positive' : 'warning';
+  netEl.className = realized.netTotal >= 0 ? 'positive' : 'negative';
   document.querySelector('#pnlLiveCosts').textContent = money(realized.liveCosts);
 
   document.querySelector('#pnlCostModelNote').textContent = realized.costModelConfigured
@@ -565,7 +566,7 @@ function renderDailySummaryTable(days) {
       <td>${renderTagBreakdown(day.signalsByAction)}</td>
       <td class="mono">${number(day.ordersLive)} / ${number(day.ordersPaper)}</td>
       <td>${renderTagBreakdown(day.ordersByOutcome)}</td>
-      <td class="mono ${day.realizedPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(day.realizedPnl)}</td>
+      <td class="mono ${day.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(day.realizedPnl)}</td>
     </tr>
   `).join('');
 }
@@ -609,7 +610,7 @@ function renderPeriodSummaryTable(buckets) {
       <td class="mono">${escapeHtml(bucket.label)} <small class="muted">(${bucket.start} to ${bucket.end})</small></td>
       <td class="mono">${number(bucket.signalsTotal)}</td>
       <td class="mono">${number(bucket.ordersLive)} / ${number(bucket.ordersPaper)}</td>
-      <td class="mono ${bucket.realizedPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(bucket.realizedPnlLive)} / ${signedMoney(bucket.realizedPnlPaper)}</td>
+      <td class="mono ${bucket.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(bucket.realizedPnlLive)} / ${signedMoney(bucket.realizedPnlPaper)}</td>
     </tr>
   `).join('');
 }
@@ -642,10 +643,10 @@ function renderStrategyPerformanceTable(strategies) {
       <td class="mono">${escapeHtml(strategy.source)}</td>
       <td class="mono">${number(strategy.tradesClosed)} <small class="muted">(${strategy.wins}W / ${strategy.losses}L)</small></td>
       <td class="mono">${strategy.winRate == null ? '—' : `${strategy.winRate.toFixed(1)}%`}</td>
-      <td class="mono ${strategy.totalPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(strategy.totalPnl)}</td>
+      <td class="mono ${strategy.totalPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(strategy.totalPnl)}</td>
       <td class="mono">${strategy.tradesClosed === 0 ? '—' : signedMoney(strategy.averagePnl)}</td>
       <td class="mono positive">${strategy.bestTrade == null ? '—' : signedMoney(strategy.bestTrade)}</td>
-      <td class="mono warning">${strategy.worstTrade == null ? '—' : signedMoney(strategy.worstTrade)}</td>
+      <td class="mono negative">${strategy.worstTrade == null ? '—' : signedMoney(strategy.worstTrade)}</td>
     </tr>
   `).join('');
 }
@@ -670,7 +671,7 @@ function renderAlertsTable(alertRows) {
   body.innerHTML = alertRows.map((alert) => `
     <tr>
       <td class="mono">${formatTimestamp(alert.createdAt)}</td>
-      <td class="mono ${alert.severity === 'CRITICAL' ? 'warning' : ''}">${escapeHtml(alert.severity)}</td>
+      <td class="mono ${alert.severity === 'CRITICAL' ? 'negative' : ''}">${escapeHtml(alert.severity)}</td>
       <td class="mono">${escapeHtml(alert.category)}</td>
       <td>${escapeHtml(alert.message)}</td>
       <td class="mono">${escapeHtml(alert.source)}</td>
@@ -973,7 +974,7 @@ function renderLedgerTable(orders) {
     return;
   }
   body.innerHTML = orders.map((order) => {
-    const outcomeClass = order.outcome === 'SUCCESS' ? 'positive' : (order.outcome === 'FAILED' || order.outcome === 'TIMEOUT') ? 'warning' : '';
+    const outcomeClass = order.outcome === 'SUCCESS' ? 'positive' : (order.outcome === 'FAILED' || order.outcome === 'TIMEOUT') ? 'negative' : '';
     const hasFillDetail = order.filledQuantity != null || order.remainingQuantity != null;
     const filledRemaining = hasFillDetail
       ? `${order.filledQuantity == null ? '—' : number(order.filledQuantity)} / ${order.remainingQuantity == null ? '—' : number(order.remainingQuantity)}`
@@ -1356,7 +1357,7 @@ async function loadAutoTradingPerformance() {
     document.querySelector('#autoPerfWinRate').textContent = !perf || perf.winRate == null ? '—' : `${perf.winRate.toFixed(1)}%`;
     const totalPnlEl = document.querySelector('#autoPerfTotalPnl');
     totalPnlEl.textContent = signedMoney(perf ? perf.totalPnl : 0);
-    totalPnlEl.className = (perf ? perf.totalPnl : 0) >= 0 ? 'positive' : 'warning';
+    totalPnlEl.className = (perf ? perf.totalPnl : 0) >= 0 ? 'positive' : 'negative';
   } catch {
     /* leave last known state on screen */
   }
@@ -1372,7 +1373,7 @@ function initAutoEquityChart() {
     timeScale: { borderColor: colors.border, timeVisible: true, secondsVisible: false },
     autoSize: true
   });
-  autoEquitySeries = autoEquityChart.addLineSeries({ color: colors.up, lineWidth: 2 });
+  autoEquitySeries = autoEquityChart.addLineSeries({ color: colors.line, lineWidth: 2 });
 }
 
 async function loadAutoTradingEquityCurve() {
@@ -1419,11 +1420,15 @@ async function refreshAll() {
   }
 }
 
+// Chart colours come from the CSS design tokens (styles.css :root) so charts,
+// candles and P&L always match the rest of the UI in light and dark.
 function chartColors() {
-  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-  return dark
-    ? { bg: '#12151f', text: '#9098ac', grid: '#1b1f2d', border: '#232838', up: '#34d399', down: '#f87171' }
-    : { bg: '#ffffff', text: '#6b7280', grid: '#f1f2f8', border: '#e6e8f0', up: '#12875a', down: '#d9364a' };
+  const css = getComputedStyle(document.documentElement);
+  const token = (name) => css.getPropertyValue(name).trim();
+  return {
+    bg: token('--chart-bg'), text: token('--chart-text'), grid: token('--chart-grid'), border: token('--chart-border'),
+    up: token('--success'), down: token('--danger'), line: token('--chart-line')
+  };
 }
 
 function initChart() {
@@ -1684,7 +1689,7 @@ function renderManualTrades(trades) {
       <td class="mono">${money(trade.entryPrice)}</td>
       <td class="mono">${trade.exitPrice == null ? '—' : money(trade.exitPrice)}</td>
       <td><span class="order-status">● ${escapeHtml(trade.status)}</span></td>
-      <td class="mono ${trade.pnl == null ? '' : trade.pnl >= 0 ? 'positive' : 'warning'}">${trade.pnl == null ? '—' : signedMoney(trade.pnl)}</td>
+      <td class="mono ${trade.pnl == null ? '' : trade.pnl >= 0 ? 'positive' : 'negative'}">${trade.pnl == null ? '—' : signedMoney(trade.pnl)}</td>
     </tr>
   `).join('');
 }
@@ -1730,18 +1735,33 @@ function updatePulseFitHeight() {
   document.documentElement.style.setProperty('--pulse-chrome-h', `${headerHeight}px`);
 }
 
-function navigateTo(pageId) {
+// Scrolls only the nav strip itself (vertical rail on desktop, bottom tab bar
+// on phones). scrollIntoView() would also scroll the page, because the tab
+// bar is fixed to the viewport.
+function keepRailLinkVisible(link) {
+  const nav = link.closest('.rail-nav');
+  if (!nav) return;
+  if (nav.scrollWidth > nav.clientWidth) {
+    nav.scrollLeft = link.offsetLeft - (nav.clientWidth - link.offsetWidth) / 2;
+  } else if (nav.scrollHeight > nav.clientHeight) {
+    if (link.offsetTop < nav.scrollTop) nav.scrollTop = link.offsetTop;
+    else if (link.offsetTop + link.offsetHeight > nav.scrollTop + nav.clientHeight) nav.scrollTop = link.offsetTop + link.offsetHeight - nav.clientHeight;
+  }
+}
+
+function navigateTo(pageId, { updateUrl = true } = {}) {
   const railLinks = [...document.querySelectorAll('.rail-link')];
   const isKnownPage = railLinks.some((link) => link.getAttribute('href') === `#${pageId}`);
   if (!isKnownPage) return;
   railLinks.forEach((link) => {
     const isTarget = link.getAttribute('href') === `#${pageId}`;
     link.classList.toggle('active', isTarget);
+    if (isTarget) link.setAttribute('aria-current', 'page'); else link.removeAttribute('aria-current');
     const page = document.querySelector(link.getAttribute('href'));
     if (page) page.hidden = !isTarget;
-    if (isTarget) link.scrollIntoView({ block: 'nearest' });
+    if (isTarget) keepRailLinkVisible(link);
   });
-  if (`#${pageId}` !== window.location.hash) {
+  if (updateUrl && `#${pageId}` !== window.location.hash) {
     history.replaceState(null, '', `#${pageId}`);
   }
   document.querySelector('main').classList.toggle('pulse-mode', pageId === 'market-pulse');
@@ -1761,7 +1781,13 @@ function initNav() {
   // page was open, derived from the URL hash rather than click history alone.
   // Always run through navigateTo (even for the default page) so pulse-mode
   // and its fit-to-viewport height get applied on first load too.
-  navigateTo(window.location.hash ? window.location.hash.slice(1) : 'market-pulse');
+  // Only persist the route in the URL once it came from the URL or a click.
+  // Writing '#market-pulse' at startup made Chrome keep scrolling to that
+  // section while the page loaded, hiding the top of the page on phones.
+  navigateTo(window.location.hash ? window.location.hash.slice(1) : 'market-pulse', { updateUrl: false });
+  // Every page is its own view, so a deep link (#positions-panel) must also
+  // start at the top rather than wherever the fragment scroll lands.
+  window.addEventListener('load', () => window.scrollTo({ top: 0, behavior: 'instant' }), { once: true });
   window.addEventListener('hashchange', () => navigateTo(window.location.hash.slice(1)));
   window.addEventListener('resize', () => {
     if (document.querySelector('main').classList.contains('pulse-mode')) updatePulseFitHeight();
@@ -1776,7 +1802,7 @@ function brokerConnectionTagClass(connectionStatus) {
 }
 
 const TOKEN_STATUS_CLASS = {
-  ACTIVE: 'positive', EXPIRING_SOON: 'warning', RENEWAL_DUE: 'warning', EXPIRED: 'warning', INVALID: 'warning', UNAVAILABLE: '',
+  ACTIVE: 'positive', EXPIRING_SOON: 'warning', RENEWAL_DUE: 'warning', EXPIRED: 'negative', INVALID: 'negative', UNAVAILABLE: '',
 };
 
 // Groww doesn't publish a real expiry timestamp (see token_service.py's
@@ -1903,7 +1929,7 @@ function renderBrokerHistoryTable(events) {
     <tr>
       <td class="mono">${formatTimestamp(event.createdAt)}</td>
       <td class="mono">${escapeHtml(event.event || '—')}</td>
-      <td class="mono ${event.status === 'SUCCESS' ? 'positive' : 'warning'}">${escapeHtml(event.status || '—')}</td>
+      <td class="mono ${event.status === 'SUCCESS' ? 'positive' : 'negative'}">${escapeHtml(event.status || '—')}</td>
       <td class="mono">${escapeHtml(event.tokenReference || '—')}</td>
       <td class="mono">${escapeHtml(event.errorMessage || '—')}</td>
     </tr>
@@ -2118,26 +2144,26 @@ function backtestKpiCard(label, value, className) {
 // understand at a glance" means a short, curated list up top, not all 12
 // computed metrics competing for attention at once.
 function renderBacktestKpis(metrics) {
-  const pnlClass = metrics.netPoints >= 0 ? 'positive' : 'warning';
-  const expectancyClass = metrics.expectancyPoints == null ? '' : metrics.expectancyPoints >= 0 ? 'positive' : 'warning';
+  const pnlClass = metrics.netPoints >= 0 ? 'positive' : 'negative';
+  const expectancyClass = metrics.expectancyPoints == null ? '' : metrics.expectancyPoints >= 0 ? 'positive' : 'negative';
   return `<div class="backtest-kpi-grid">
     ${backtestKpiCard('Trades', number(metrics.totalTrades))}
     ${backtestKpiCard('Win rate', metrics.winRate == null ? '—' : `${metrics.winRate.toFixed(1)}%`)}
     ${backtestKpiCard('Profit factor', metrics.profitFactor == null ? '—' : metrics.profitFactor.toFixed(2))}
     ${backtestKpiCard('Net P&L (pts)', metrics.netPoints.toFixed(1), pnlClass)}
     ${backtestKpiCard('Expectancy (pts)', metrics.expectancyPoints == null ? '—' : metrics.expectancyPoints.toFixed(1), expectancyClass)}
-    ${backtestKpiCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1), metrics.maxDrawdownPoints > 0 ? 'warning' : '')}
-    ${backtestKpiCard('Max consec. losses', number(metrics.maxConsecutiveLosses), metrics.maxConsecutiveLosses > 0 ? 'warning' : '')}
+    ${backtestKpiCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1), metrics.maxDrawdownPoints > 0 ? 'negative' : '')}
+    ${backtestKpiCard('Max consec. losses', number(metrics.maxConsecutiveLosses), metrics.maxConsecutiveLosses > 0 ? 'negative' : '')}
   </div>`;
 }
 
 function renderBacktestSecondary(metrics) {
   return `<div class="backtest-metric-grid">
     ${renderMetricCard('Wins', number(metrics.wins), 'positive')}
-    ${renderMetricCard('Losses', number(metrics.losses), metrics.losses > 0 ? 'warning' : '')}
-    ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1), metrics.averageTradePoints >= 0 ? 'positive' : 'warning')}
+    ${renderMetricCard('Losses', number(metrics.losses), metrics.losses > 0 ? 'negative' : '')}
+    ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1), metrics.averageTradePoints >= 0 ? 'positive' : 'negative')}
     ${renderMetricCard('Largest win (pts)', metrics.largestWinPoints == null ? '—' : metrics.largestWinPoints.toFixed(1), 'positive')}
-    ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'warning')}
+    ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'negative')}
   </div>`;
 }
 
@@ -2147,7 +2173,7 @@ function renderDirectionCard(label, perf, cssClass) {
     <div class="backtest-metric-grid">
       ${renderMetricCard('Trades', number(perf.trades))}
       ${renderMetricCard('Win rate', perf.win_rate == null ? '—' : `${perf.win_rate.toFixed(1)}%`)}
-      ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'warning')}
+      ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'negative')}
     </div>
   </div>`;
 }
@@ -2158,7 +2184,7 @@ function backtestBucketRows(buckets) {
       <td class="mono">${escapeHtml(b.label)}</td>
       <td class="mono">${number(b.trades)}</td>
       <td class="mono">${b.win_rate == null ? '—' : `${b.win_rate.toFixed(1)}%`}</td>
-      <td class="mono ${b.net_points >= 0 ? 'positive' : 'warning'}">${b.net_points.toFixed(1)}</td>
+      <td class="mono ${b.net_points >= 0 ? 'positive' : 'negative'}">${b.net_points.toFixed(1)}</td>
     </tr>`).join('');
 }
 
@@ -2179,7 +2205,7 @@ function mountEquityChart(containerId, trades) {
     timeScale: { borderColor: colors.border, timeVisible: true, secondsVisible: false },
     autoSize: true,
   });
-  const series = chart.addLineSeries({ color: '#4f46e5', lineWidth: 2 });
+  const series = chart.addLineSeries({ color: colors.line, lineWidth: 2 });
   const sorted = [...trades].sort((a, b) => new Date(a.exitTime) - new Date(b.exitTime));
   const seenTimes = new Set();
   let cumulative = 0;
