@@ -173,7 +173,7 @@ def test_classify_failure(error, expected) -> None:
 def test_the_reported_example_market_data_403_keeps_broker_connected(web_app, service) -> None:
     """Profile OK + Positions OK + Orders OK + Market Data 403."""
     service._client.failures["get_quote"] = GrowwAPIException(code="GA403", msg=FORBIDDEN)
-    web_app.snapshot()  # the Positions grid's real get_quote call - swallowed there, tracked here
+    web_app._quote("X")
 
     account = web_server.account()
     assert account["profile"]["connected"] is True
@@ -306,11 +306,11 @@ def test_a_successful_call_never_revives_an_auth_failed_connection(service) -> N
 
 def test_endpoint_recovers_to_available_after_its_403_clears(web_app, service) -> None:
     service._client.failures["get_quote"] = GrowwAPIAuthorisationException()
-    web_app.snapshot()
+    web_app._quote("X")
     assert web_server.account()["marketData"]["status"] == "PERMISSION_DENIED_OR_UNAVAILABLE"
 
     service._client.failures.clear()  # e.g. Live Data permission enabled on the account
-    web_app.snapshot()
+    web_app._quote("X")
 
     assert web_server.account()["marketData"]["status"] == "AVAILABLE"
     assert web_server.broker_status()["capabilities"]["market_data"]["status"] == "AVAILABLE"

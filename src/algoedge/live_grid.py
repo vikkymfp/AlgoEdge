@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
 from typing import Any
 
 from growwapi.groww.exceptions import GrowwAPIException
@@ -16,24 +14,6 @@ class LiveGridService:
     def __init__(self, broker: GrowwBroker, settings: Settings) -> None:
         self.broker = broker
         self.settings = settings
-        self.order_ledger_path = Path("data/grid_orders.json")
-
-    def snapshot(self) -> dict[str, list[dict[str, Any]]]:
-        positions = self._payload(self.broker.client.get_positions_for_user(segment="CASH"))
-        orders = self._payload(
-            self.broker.client.get_order_list(segment="CASH", page=0, page_size=25)
-        )
-        symbols = {
-            str(item.get("trading_symbol", "")).upper()
-            for item in [*positions, *orders]
-            if item.get("trading_symbol")
-        }
-        if not symbols:
-            symbols.add(self.settings.symbol.upper())
-        return {
-            "displayName": self.settings.display_name,
-            "grids": [self._grid(symbol, positions, orders) for symbol in sorted(symbols)],
-        }
 
     def positions_snapshot(self) -> dict[str, Any]:
         positions = self._payload(self.broker.client.get_positions_for_user(segment="CASH"))
@@ -49,8 +29,7 @@ class LiveGridService:
         fno_orders = self._payload(
             self.broker.client.get_order_list(segment="FNO", page=0, page_size=50)
         )
-        ledger = self._load_ledger()
-        orders = [self._normalize_order(item, ledger) for item in [*cash_orders, *fno_orders]]
+        orders = [self._normalize_order(item) for item in [*cash_orders, *fno_orders]]
         return {"source": "LIVE BROKER DATA", "orders": orders}
 
     def account_snapshot(self) -> dict[str, Any]:
@@ -173,54 +152,6 @@ class LiveGridService:
         except (KeyError, OSError, TimeoutError, TypeError, ValueError) as error:
             return False, f"{type(error).__name__}: {error}"
 
-    def _grid(
-        self,
-        symbol: str,
-        positions: list[dict[str, Any]],
-        orders: list[dict[str, Any]],
-    ) -> dict[str, Any]:
-        position = next(
-            (item for item in positions if str(item.get("trading_symbol", "")).upper() == symbol),
-            {},
-        )
-        quote = self._quote(symbol)
-        size = self._number(position.get("quantity"), 0)
-        average_entry = self._number(position.get("net_price"), None)
-        mark_price = self._number(quote.get("ltp"), None) if quote else None
-        unrealized_pnl = (
-            (mark_price - average_entry) * size
-            if mark_price is not None and average_entry is not None
-            else None
-        )
-        open_orders = [
-            item for item in orders
-            if str(item.get("order_status", "")).upper() in {"OPEN", "PENDING", "TRIGGER_PENDING"}
-            and str(item.get("trading_symbol", "")).upper() == symbol
-        ]
-        ledger = self._load_ledger()
-        normalized_orders = [self._normalize_order(item, ledger) for item in open_orders]
-        return {
-            "id": f"live-{symbol.lower()}",
-            "name": f"Live {symbol}",
-            "symbol": symbol,
-            "description": f"{symbol} · {self.settings.groww_exchange} · Cash delivery",
-            "status": "RUNNING" if size else "PAUSED",
-            "source": "LIVE BROKER DATA",
-            "range": "Not configured",
-            "spacing": "Not configured",
-            "realizedPnl": self._number(position.get("realised_pnl"), 0),
-            "size": size,
-            "side": "LONG" if size > 0 else "SHORT" if size < 0 else "FLAT",
-            "averageEntry": average_entry,
-            "markPrice": mark_price,
-            "unrealizedPnl": unrealized_pnl,
-            "liquidationPrice": None,
-            "utilization": None,
-            "health": None,
-            "nextTrigger": None,
-            "orders": normalized_orders,
-        }
-
     def _position(self, position: dict[str, Any]) -> dict[str, Any]:
         symbol = str(position.get("trading_symbol", ""))
         quantity = self._number(position.get("quantity"), 0)
@@ -253,8 +184,7 @@ class LiveGridService:
         except (GrowwAPIException, KeyError, TypeError, ValueError):
             return None
 
-    def _normalize_order(self, order: dict[str, Any], ledger: dict[str, Any]) -> dict[str, Any]:
-        reference = str(order.get("order_reference_id", ""))
+    def _normalize_order(self, order: dict[str, Any]) -> dict[str, Any]:
         actual_price = self._number(
             order.get("price") or order.get("average_fill_price"),
             0,
@@ -264,18 +194,8 @@ class LiveGridService:
             "side": str(order.get("transaction_type", "")).upper(),
             "quantity": self._number(order.get("quantity"), 0),
             "actualPrice": actual_price,
-            "gridLevel": ledger.get(reference),
             "status": str(order.get("order_status", "")).upper(),
         }
-
-    def _load_ledger(self) -> dict[str, Any]:
-        if not self.order_ledger_path.exists():
-            return {}
-        try:
-            value = json.loads(self.order_ledger_path.read_text(encoding="utf-8"))
-            return value if isinstance(value, dict) else {}
-        except (OSError, json.JSONDecodeError):
-            return {}
 
     @staticmethod
     def _payload(response: dict[str, Any]) -> list[dict[str, Any]]:

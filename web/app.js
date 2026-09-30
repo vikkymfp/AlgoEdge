@@ -65,31 +65,6 @@ const authSession = (() => {
   return { ready };
 })();
 
-const demoGrids = [
-  {
-    id: 'delta-01', name: 'Delta 01', symbol: 'RELIANCE', description: 'RELIANCE · NSE · Cash delivery', status: 'RUNNING', source: 'PAPER SNAPSHOT',
-    range: '₹2,740 — ₹3,020', spacing: '₹20.00', realizedPnl: 8460, size: 320, side: 'LONG', averageEntry: 2864.50, markPrice: 2918.25, unrealizedPnl: 17200, liquidationPrice: 2486.00, utilization: 64, health: 82, nextTrigger: 2940,
-    orders: [
-      { side: 'BUY', quantity: 80, actualPrice: 2842.10, gridLevel: 2840, status: 'OPEN' },
-      { side: 'SELL', quantity: 80, actualPrice: 2949.80, gridLevel: 2950, status: 'OPEN' },
-      { side: 'BUY', quantity: 80, actualPrice: 2801.25, gridLevel: 2800, status: 'OPEN' }
-    ]
-  },
-  {
-    id: 'delta-02', name: 'Delta 02', symbol: 'TCS', description: 'TCS · NSE · Cash delivery', status: 'RUNNING', source: 'PAPER SNAPSHOT',
-    range: '₹3,220 — ₹3,540', spacing: '₹25.00', realizedPnl: 12980, size: 180, side: 'LONG', averageEntry: 3378.20, markPrice: 3412.60, unrealizedPnl: 6192, liquidationPrice: 2994.00, utilization: 48, health: 91, nextTrigger: 3435,
-    orders: [
-      { side: 'BUY', quantity: 45, actualPrice: 3349.50, gridLevel: 3350, status: 'OPEN' },
-      { side: 'SELL', quantity: 45, actualPrice: 3441.20, gridLevel: 3450, status: 'OPEN' }
-    ]
-  },
-  {
-    id: 'delta-03', name: 'Delta 03', symbol: 'INFY', description: 'INFY · NSE · Cash delivery', status: 'PAUSED', source: 'PAPER SNAPSHOT',
-    range: '₹1,420 — ₹1,620', spacing: '₹15.00', realizedPnl: 3840, size: 0, side: 'FLAT', averageEntry: 0, markPrice: 1538.40, unrealizedPnl: 0, liquidationPrice: null, utilization: 0, health: 76, nextTrigger: 1550,
-    orders: [{ side: 'BUY', quantity: 60, actualPrice: 1521.75, gridLevel: 1520, status: 'OPEN' }]
-  }
-];
-
 const CHART_INDICES = [
   { id: 'nifty-50', name: 'NIFTY 50' },
   { id: 'bank-nifty', name: 'BANK NIFTY' },
@@ -104,9 +79,6 @@ const CHART_TIMEFRAMES = [
 ];
 const MARKET_SYNC_INTERVAL_MS = 20000;
 
-let grids = demoGrids;
-let activeGridId = grids[0].id;
-let isRefreshing = false;
 let marketRefreshing = false;
 let autoSyncTimer;
 let brokerSyncTimer;
@@ -129,7 +101,7 @@ const riskAmount = (value, unit) => value == null ? '—'
 const signedRiskAmount = (value, unit) => value == null ? '—' : `${value >= 0 ? '+' : '-'}${riskAmount(value, unit)}`;
 
 // Decouples the 1s UI heartbeat (just re-renders "Xs ago" from a timestamp)
-// from actually hitting Groww: broker-data fetches (positions/orders/grids)
+// from actually hitting Groww: broker-data fetches (positions/orders)
 // run on their own slower brokerSyncTimer (see bottom of file) and only
 // update lastBrokerSyncAt/brokerLive here - the label never implies Groww
 // is being polled every second, because it isn't.
@@ -160,8 +132,6 @@ function renderSyncHeartbeat() {
   const seconds = Math.max(0, Math.round((Date.now() - lastBrokerSyncAt) / 1000));
   pill.innerHTML = `<i></i>Last API success · ${seconds === 0 ? 'just now' : `${seconds}s ago`}`;
 }
-
-function getActiveGrid() { return grids.find((grid) => grid.id === activeGridId) || grids[0]; }
 
 function escapeHtml(value) {
   return String(value ?? '—').replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
@@ -577,16 +547,6 @@ function sparkline(points, positive) {
   const spread = maximum - minimum || 1;
   const polyline = points.map((point, index) => `${(index / (points.length - 1)) * width},${height - ((point - minimum) / spread) * height}`).join(' ');
   return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><polyline class="${positive ? 'line-up' : 'line-down'}" points="${polyline}" /></svg>`;
-}
-
-function renderTabs() {
-  document.querySelector('#gridTabs').innerHTML = grids.map((grid) => `
-    <button class="grid-tab ${grid.id === activeGridId ? 'active' : ''}" type="button" aria-selected="${grid.id === activeGridId}" data-grid-id="${grid.id}">${grid.name}</button>
-  `).join('');
-  document.querySelectorAll('.grid-tab').forEach((button) => button.addEventListener('click', () => {
-    activeGridId = button.dataset.gridId;
-    render();
-  }));
 }
 
 function renderPositionsSummaryStrip(positions) {
@@ -1249,62 +1209,6 @@ async function loadOrders() {
     renderOrdersTable([]);
     markBrokerSynced(false);
   }
-}
-
-function render() {
-  const grid = getActiveGrid();
-  const hasMark = typeof grid.markPrice === 'number';
-  const entryMove = hasMark && grid.averageEntry ? ((grid.markPrice - grid.averageEntry) / grid.averageEntry) * 100 : null;
-  const liqBuffer = hasMark && grid.liquidationPrice ? ((grid.markPrice - grid.liquidationPrice) / grid.markPrice) * 100 : null;
-  document.querySelector('#gridName').textContent = grid.name;
-  document.querySelector('#gridDescription').textContent = grid.description;
-  document.querySelector('#gridStatus').textContent = grid.status;
-  document.querySelector('#gridRange').textContent = grid.range;
-  document.querySelector('#gridSpacing').textContent = grid.spacing;
-  document.querySelector('#realizedPnl').textContent = signedMoney(grid.realizedPnl);
-  document.querySelector('#sourceLabel').textContent = grid.source;
-  document.querySelector('#positionSize').innerHTML = `${number(grid.size)} <small>shares</small>`;
-  document.querySelector('#positionSide').textContent = grid.side;
-  document.querySelector('#averageEntry').textContent = money(grid.averageEntry);
-  document.querySelector('#markPrice').textContent = money(grid.markPrice);
-  document.querySelector('#markMove').textContent = entryMove == null ? 'Live mark unavailable' : `${signedPercent(entryMove)} from entry`;
-  document.querySelector('#unrealizedPnl').textContent = signedMoney(grid.unrealizedPnl);
-  document.querySelector('#pnlPercent').textContent = entryMove == null ? 'Live mark unavailable' : signedPercent(entryMove);
-  document.querySelector('#liquidationPrice').textContent = money(grid.liquidationPrice);
-  document.querySelector('#liqDistance').textContent = liqBuffer == null ? 'Not supplied by broker' : `${liqBuffer.toFixed(2)}% buffer to mark`;
-  document.querySelector('#healthScore').textContent = grid.health == null ? '—' : grid.health;
-  document.querySelector('#healthBar').style.width = grid.health == null ? '0%' : `${grid.health}%`;
-  document.querySelector('#utilization').textContent = grid.utilization == null ? 'Unavailable' : `${grid.utilization}%`;
-  document.querySelector('#orderNotional').textContent = money(grid.orders.reduce((total, order) => total + order.quantity * order.actualPrice, 0) / 100000) + 'L';
-  document.querySelector('#nextTrigger').textContent = money(grid.nextTrigger);
-  document.querySelector('#riskMessage').textContent = grid.size === 0 ? 'No position is open. The grid is waiting for its first fill.' : `Mark is inside the active grid. ${grid.orders.length} orders are waiting for execution.`;
-  renderTabs();
-}
-
-async function loadGrids() {
-  setRefreshing(true);
-  try {
-    const response = await fetch('/api/grids', { headers: { Accept: 'application/json' } });
-    if (!response.ok) throw new Error('Grid API unavailable');
-    const payload = await response.json();
-    if (!Array.isArray(payload.grids) || payload.grids.length === 0) throw new Error('No grids returned');
-    grids = payload.grids;
-    activeGridId = grids[0].id;
-    markBrokerSynced(true);
-    document.querySelector('#sourceLabel').textContent = 'LIVE BROKER DATA';
-    document.querySelector('#footerMode').textContent = 'Groww position and order feed';
-  } catch {
-    markBrokerSynced(false);
-    document.querySelector('#footerMode').textContent = 'Paper data until API feed is connected';
-  }
-  render();
-  setRefreshing(false);
-}
-
-// Guards the 3s broker poll against overlapping grid loads. (The manual
-// header refresh button was removed; auto-sync below is unchanged.)
-function setRefreshing(active) {
-  isRefreshing = active;
 }
 
 async function loadMarket() {
@@ -2656,7 +2560,6 @@ renderIndexTabs();
 renderTimeframeTabs();
 renderOptionMarketIndexTabs();
 initChart();
-loadGrids();
 loadPositions();
 loadOrders();
 loadAutoTradingStatus();
@@ -2690,12 +2593,10 @@ autoSyncTimer = window.setInterval(() => {
   loadAutoTradingStatus();
   renderSyncHeartbeat();
 }, 1000);
-// Actual Groww polling (positions/orders/grids all call real broker
-// endpoints - see live_grid.py) - paced at 3s, inside the 2-5s range that
+// Actual Groww polling (positions/orders call real broker endpoints)
+// - paced at 3s, inside the 2-5s range that
 // keeps this well clear of Groww's rate limits while still feeling live.
 brokerSyncTimer = window.setInterval(() => {
-  if (isRefreshing) return;
-  loadGrids();
   loadPositions();
   loadOrders();
 }, 3000);

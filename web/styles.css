@@ -656,49 +656,6 @@ main { padding-top: 28px; padding-bottom: 48px; }
 @media (max-width: 1024px) { .trade-form { grid-template-columns: repeat(2, 1fr); } }
 @media (max-width: 640px) { .trade-form { grid-template-columns: 1fr; } }
 
-/* ---------- grid workspace ---------- */
-.grid-tabs { display: flex; gap: 4px; margin: 32px 0 0; padding: 4px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); width: fit-content; }
-.grid-tab { padding: 9px 18px; border: 0; border-radius: 8px; color: var(--text-muted); background: transparent; font: 600 12px var(--font-ui); transition: color .15s ease, background .15s ease; }
-.grid-tab:hover { color: var(--text); background: var(--surface-hover); }
-.grid-tab.active { color: var(--primary); background: var(--primary-soft); }
-
-.grid-overview {
-  display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 24px;
-  margin-top: 18px; padding: 22px 24px; border: 1px solid var(--border); border-radius: var(--radius-lg);
-  background: var(--surface); box-shadow: var(--shadow-sm);
-}
-.grid-title-block, .title-line { display: flex; align-items: center; }
-.grid-title-block { gap: 14px; }
-.instrument-icon { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 13px; background: var(--primary); color: #fff; font: 700 18px var(--font-ui); }
-.title-line { gap: 10px; }
-h2 { font-size: 18px; }
-.grid-title-block p { margin: 5px 0 0; color: var(--text-muted); font: 500 12px var(--font-mono); }
-.status-tag { color: var(--success); background: var(--success-soft); }
-.overview-metrics { display: flex; align-items: center; gap: clamp(20px, 4vw, 48px); }
-.overview-metrics span, .metric-card span { display: block; color: var(--text-faint); font: 600 10px var(--font-ui); letter-spacing: .04em; text-transform: uppercase; }
-.overview-metrics strong { display: block; margin-top: 6px; font-size: 14px; font-weight: 700; white-space: nowrap; }
-
-/* ---------- position grid ---------- */
-.position-section { padding-top: 40px; }
-.source-label { color: var(--warning-text); background: var(--warning-soft); }
-.position-grid { display: grid; grid-template-columns: 1.15fr repeat(4, 1fr); gap: 12px; margin-top: 20px; }
-.metric-card {
-  min-height: 142px; padding: 20px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface); box-shadow: var(--shadow-sm);
-  transition: transform .18s ease, box-shadow .18s ease;
-}
-.metric-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); }
-.metric-card strong { display: block; margin-top: 20px; color: var(--text); font-size: 22px; font-weight: 700; letter-spacing: -.01em; white-space: nowrap; }
-.metric-card strong small { color: var(--text-muted); font: 600 11px var(--font-ui); }
-.metric-card em {
-  display: inline-block; margin-top: 12px; padding: 4px 8px; border-radius: 6px;
-  color: var(--primary); background: var(--primary-soft); font: 700 10px var(--font-ui); font-style: normal;
-}
-.metric-card .muted, .metric-card > small { display: block; margin-top: 8px; color: var(--text-muted); font: 500 11px var(--font-mono); }
-.pnl-card { background: var(--success-soft); border-color: transparent; }
-.pnl-card strong { color: var(--success); }
-.risk-card { background: var(--warning-soft); border-color: transparent; }
-
 /* ---------- orders + health ---------- */
 .lower-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .75fr); gap: 14px; }
 .panel { border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); }
@@ -883,7 +840,6 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   .market-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .market-card:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .pulse-lower { grid-template-columns: 1fr; }
-  .position-grid { grid-template-columns: repeat(3, 1fr); }
   .lower-grid { grid-template-columns: 1fr; }
   .account-summary { grid-template-columns: repeat(2, 1fr); }
   .positions-summary-strip, .account-summary.compact, .option-market-summary { grid-template-columns: repeat(2, 1fr); }
@@ -921,14 +877,6 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   .broker-mini-view { margin-left: 0; }
   .option-market-summary, .option-leg-grid { margin-left: 16px; margin-right: 16px; }
   .option-leg-grid { grid-template-columns: 1fr; }
-  .grid-tabs { margin-top: 30px; overflow-x: auto; width: auto; }
-  .grid-tab { padding: 9px 14px; white-space: nowrap; }
-  .grid-overview { padding: 18px; }
-  .overview-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; width: 100%; }
-  .overview-metrics strong { white-space: normal; line-height: 1.35; }
-  .position-grid { grid-template-columns: repeat(2, 1fr); }
-  .metric-card { min-height: 122px; padding: 16px; }
-  .metric-card strong { margin-top: 16px; font-size: 19px; }
   /* Tables keep readable text and scroll inside their own card, never the page. */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .table-wrap table { min-width: 560px; }
@@ -952,13 +900,6 @@ footer { display: flex; justify-content: space-between; padding: 20px 0 30px; co
   footer span { display: block; }
 }
 @media (max-width: 420px) {
-  .position-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-  .metric-card:first-child { grid-column: span 2; min-height: 100px; }
-  .metric-card strong { margin-top: 14px; font-size: 17px; }
-  .overview-metrics { grid-template-columns: 1fr; gap: 10px; }
-  .overview-metrics div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
-  .overview-metrics strong { margin-top: 0; text-align: right; }
-  .source-label { white-space: normal; }
   .positions-summary-strip, .account-summary.compact, .account-summary, .option-market-summary { grid-template-columns: 1fr; }
 }
 

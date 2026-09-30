@@ -357,7 +357,11 @@ def test_odbc_url_sql_auth_requires_credentials(user: str, password: str) -> Non
 
 
 def test_init_db_disables_persistence_when_sql_auth_credentials_missing() -> None:
-    settings = Settings(db_server="localhost", db_trusted_connection=False)
+    settings = Settings(
+        _env_file=None,
+        db_server="localhost",
+        db_trusted_connection=False,
+    )
 
     assert db_module.init_db(settings) is False
     assert db_module.is_available() is False
