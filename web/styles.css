@@ -423,6 +423,8 @@ main { padding-top: 28px; padding-bottom: 48px; }
 .auto-panel { padding: 22px; }
 .status-tag.danger { color: var(--danger-text); background: var(--danger-soft); }
 .status-tag.warning { color: var(--warning-text); background: var(--warning-soft); }
+.status-tag.neutral { color: var(--text-muted); background: var(--surface-alt); }
+.status-tag.info { color: var(--primary); background: var(--primary-soft); }
 .auto-status-tags { display: flex; align-items: center; gap: 8px; }
 .experimental-banner {
   display: flex; align-items: center; gap: 12px; margin-bottom: 14px; padding: 12px 16px;
@@ -467,6 +469,20 @@ main { padding-top: 28px; padding-bottom: 48px; }
 .text-button-solid:hover { background: var(--surface-hover); border-color: var(--text-faint); }
 .text-button-solid.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
 .text-button-solid.danger:hover { background: var(--danger-soft); }
+.text-button-solid.primary {
+  color: #fff;
+  background: var(--primary);
+  border-color: var(--primary);
+}
+.text-button-solid.primary:hover {
+  background: var(--primary-strong);
+  border-color: var(--primary-strong);
+}
+.text-button-solid.primary:disabled {
+  color: var(--text-faint);
+  background: var(--surface-alt);
+  border-color: var(--border);
+}
 .auto-summary { margin-top: 18px; }
 .auto-result { margin-top: 18px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-alt); font: 500 12px var(--font-ui); }
 .auto-result dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
