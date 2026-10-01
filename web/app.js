@@ -546,7 +546,9 @@ function sparkline(points, positive) {
   const height = 48;
   const spread = maximum - minimum || 1;
   const polyline = points.map((point, index) => `${(index / (points.length - 1)) * width},${height - ((point - minimum) / spread) * height}`).join(' ');
-  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><polyline class="${positive ? 'line-up' : 'line-down'}" points="${polyline}" /></svg>`;
+  const direction = positive ? 'up' : 'down';
+  const areaPoints = `0,${height} ${polyline} ${width},${height}`;
+  return `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-hidden="true"><polygon class="area-${direction}" points="${areaPoints}" /><polyline class="line-${direction}" points="${polyline}" /></svg>`;
 }
 
 function renderPositionsSummaryStrip(positions) {
@@ -556,7 +558,7 @@ function renderPositionsSummaryStrip(positions) {
   document.querySelector('#summaryExposure').textContent = money(exposure);
   const unrealizedEl = document.querySelector('#summaryUnrealizedPnl');
   unrealizedEl.textContent = positions.length === 0 ? '—' : signedMoney(unrealizedTotal);
-  unrealizedEl.className = positions.length === 0 ? '' : unrealizedTotal >= 0 ? 'positive' : 'warning';
+  unrealizedEl.className = positions.length === 0 ? '' : unrealizedTotal >= 0 ? 'positive' : 'negative';
 }
 
 function renderPositionsTable(positions) {
@@ -578,8 +580,8 @@ function renderPositionsTable(positions) {
       <td class="mono">${number(position.quantity)}</td>
       <td class="mono">${money(position.averagePrice)}</td>
       <td class="mono">${money(position.ltp)}</td>
-      <td class="mono ${position.unrealizedPnl >= 0 ? 'positive' : ''}">${signedMoney(position.unrealizedPnl)}</td>
-      <td class="mono ${position.realizedPnl >= 0 ? 'positive' : ''}">${signedMoney(position.realizedPnl)}</td>
+      <td class="mono ${position.unrealizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(position.unrealizedPnl)}</td>
+      <td class="mono ${position.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(position.realizedPnl)}</td>
     </tr>
   `).join('');
 }
@@ -605,11 +607,11 @@ function renderPnl(payload) {
 
   const totalEl = document.querySelector('#pnlTotalRealized');
   totalEl.textContent = signedMoney(realized.total);
-  totalEl.className = realized.total >= 0 ? 'positive' : 'warning';
+  totalEl.className = realized.total >= 0 ? 'positive' : 'negative';
 
   const summaryRealizedEl = document.querySelector('#summaryRealizedPnl');
   summaryRealizedEl.textContent = signedMoney(realized.total);
-  summaryRealizedEl.className = realized.total >= 0 ? 'positive' : 'warning';
+  summaryRealizedEl.className = realized.total >= 0 ? 'positive' : 'negative';
 
   document.querySelector('#pnlLiveRealized').textContent = signedMoney(realized.live);
   document.querySelector('#pnlPaperRealized').textContent = signedMoney(realized.paper);
@@ -620,7 +622,7 @@ function renderPnl(payload) {
     paperUnrealizedEl.className = '';
   } else {
     paperUnrealizedEl.textContent = signedMoney(unrealized.paper);
-    paperUnrealizedEl.className = unrealized.paper >= 0 ? 'positive' : 'warning';
+    paperUnrealizedEl.className = unrealized.paper >= 0 ? 'positive' : 'negative';
   }
 
   document.querySelector('#pnlLiveUnrealizedNote').textContent =
@@ -628,7 +630,7 @@ function renderPnl(payload) {
 
   const netEl = document.querySelector('#pnlNetTotal');
   netEl.textContent = signedMoney(realized.netTotal);
-  netEl.className = realized.netTotal >= 0 ? 'positive' : 'warning';
+  netEl.className = realized.netTotal >= 0 ? 'positive' : 'negative';
   document.querySelector('#pnlLiveCosts').textContent = money(realized.liveCosts);
 
   document.querySelector('#pnlCostModelNote').textContent = realized.costModelConfigured
@@ -670,7 +672,7 @@ function renderDailySummaryTable(days) {
       <td>${renderTagBreakdown(day.signalsByAction)}</td>
       <td class="mono">${number(day.ordersLive)} / ${number(day.ordersPaper)}</td>
       <td>${renderTagBreakdown(day.ordersByOutcome)}</td>
-      <td class="mono ${day.realizedPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(day.realizedPnl)}</td>
+      <td class="mono ${day.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(day.realizedPnl)}</td>
     </tr>
   `).join('');
 }
@@ -714,7 +716,7 @@ function renderPeriodSummaryTable(buckets) {
       <td class="mono">${escapeHtml(bucket.label)} <small class="muted">(${bucket.start} to ${bucket.end})</small></td>
       <td class="mono">${number(bucket.signalsTotal)}</td>
       <td class="mono">${number(bucket.ordersLive)} / ${number(bucket.ordersPaper)}</td>
-      <td class="mono ${bucket.realizedPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(bucket.realizedPnlLive)} / ${signedMoney(bucket.realizedPnlPaper)}</td>
+      <td class="mono ${bucket.realizedPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(bucket.realizedPnlLive)} / ${signedMoney(bucket.realizedPnlPaper)}</td>
     </tr>
   `).join('');
 }
@@ -747,7 +749,7 @@ function renderStrategyPerformanceTable(strategies) {
       <td class="mono">${escapeHtml(strategy.source)}</td>
       <td class="mono">${number(strategy.tradesClosed)} <small class="muted">(${strategy.wins}W / ${strategy.losses}L)</small></td>
       <td class="mono">${strategy.winRate == null ? '—' : `${strategy.winRate.toFixed(1)}%`}</td>
-      <td class="mono ${strategy.totalPnl >= 0 ? 'positive' : 'warning'}">${signedMoney(strategy.totalPnl)}</td>
+      <td class="mono ${strategy.totalPnl >= 0 ? 'positive' : 'negative'}">${signedMoney(strategy.totalPnl)}</td>
       <td class="mono">${strategy.tradesClosed === 0 ? '—' : signedMoney(strategy.averagePnl)}</td>
       <td class="mono positive">${strategy.bestTrade == null ? '—' : signedMoney(strategy.bestTrade)}</td>
       <td class="mono warning">${strategy.worstTrade == null ? '—' : signedMoney(strategy.worstTrade)}</td>
@@ -1114,7 +1116,7 @@ function renderLedgerTable(orders) {
     return;
   }
   body.innerHTML = orders.map((order) => {
-    const outcomeClass = order.outcome === 'SUCCESS' ? 'positive' : (order.outcome === 'FAILED' || order.outcome === 'TIMEOUT') ? 'warning' : '';
+    const outcomeClass = order.outcome === 'SUCCESS' ? 'positive' : (order.outcome === 'FAILED' || order.outcome === 'TIMEOUT') ? 'negative' : '';
     const hasFillDetail = order.filledQuantity != null || order.remainingQuantity != null;
     const filledRemaining = hasFillDetail
       ? `${order.filledQuantity == null ? '—' : number(order.filledQuantity)} / ${order.remainingQuantity == null ? '—' : number(order.remainingQuantity)}`
@@ -1801,7 +1803,7 @@ async function placeTradeOrder() {
     const response = await fetch(`/api/manual-trading/order?${tradeQueryParams()}`, { method: 'POST', headers: { Accept: 'application/json' } });
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || 'Order failed');
-    const outcomeClass = payload.outcome === 'SUCCESS' ? 'positive' : payload.outcome === 'CANCELLED' ? 'warning' : '';
+    const outcomeClass = payload.outcome === 'SUCCESS' ? 'positive' : payload.outcome === 'CANCELLED' ? 'negative' : '';
     resultEl.innerHTML = `<dl>
       <dt>Outcome</dt><dd class="${outcomeClass}">${escapeHtml(payload.outcome)}</dd>
       <dt>Order status</dt><dd>${escapeHtml(payload.orderStatus || '—')}</dd>
@@ -2324,15 +2326,15 @@ function backtestKpiCard(label, value, className) {
 // understand at a glance" means a short, curated list up top, not all 12
 // computed metrics competing for attention at once.
 function renderBacktestKpis(metrics) {
-  const pnlClass = metrics.netPoints >= 0 ? 'positive' : 'warning';
-  const expectancyClass = metrics.expectancyPoints == null ? '' : metrics.expectancyPoints >= 0 ? 'positive' : 'warning';
+  const pnlClass = metrics.netPoints >= 0 ? 'positive' : 'negative';
+  const expectancyClass = metrics.expectancyPoints == null ? '' : metrics.expectancyPoints >= 0 ? 'positive' : 'negative';
   return `<div class="backtest-kpi-grid">
     ${backtestKpiCard('Trades', number(metrics.totalTrades))}
     ${backtestKpiCard('Win rate', metrics.winRate == null ? '—' : `${metrics.winRate.toFixed(1)}%`)}
     ${backtestKpiCard('Profit factor', metrics.profitFactor == null ? '—' : metrics.profitFactor.toFixed(2))}
     ${backtestKpiCard('Net P&L (pts)', metrics.netPoints.toFixed(1), pnlClass)}
     ${backtestKpiCard('Expectancy (pts)', metrics.expectancyPoints == null ? '—' : metrics.expectancyPoints.toFixed(1), expectancyClass)}
-    ${backtestKpiCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1), metrics.maxDrawdownPoints > 0 ? 'warning' : '')}
+    ${backtestKpiCard('Max drawdown (pts)', metrics.maxDrawdownPoints.toFixed(1), metrics.maxDrawdownPoints > 0 ? 'negative' : '')}
     ${backtestKpiCard('Max consec. losses', number(metrics.maxConsecutiveLosses), metrics.maxConsecutiveLosses > 0 ? 'warning' : '')}
   </div>`;
 }
@@ -2340,10 +2342,10 @@ function renderBacktestKpis(metrics) {
 function renderBacktestSecondary(metrics) {
   return `<div class="backtest-metric-grid">
     ${renderMetricCard('Wins', number(metrics.wins), 'positive')}
-    ${renderMetricCard('Losses', number(metrics.losses), metrics.losses > 0 ? 'warning' : '')}
-    ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1), metrics.averageTradePoints >= 0 ? 'positive' : 'warning')}
+    ${renderMetricCard('Losses', number(metrics.losses), metrics.losses > 0 ? 'negative' : '')}
+    ${renderMetricCard('Avg trade (pts)', metrics.averageTradePoints.toFixed(1), metrics.averageTradePoints >= 0 ? 'positive' : 'negative')}
     ${renderMetricCard('Largest win (pts)', metrics.largestWinPoints == null ? '—' : metrics.largestWinPoints.toFixed(1), 'positive')}
-    ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'warning')}
+    ${renderMetricCard('Largest loss (pts)', metrics.largestLossPoints == null ? '—' : metrics.largestLossPoints.toFixed(1), 'negative')}
   </div>`;
 }
 
@@ -2353,7 +2355,7 @@ function renderDirectionCard(label, perf, cssClass) {
     <div class="backtest-metric-grid">
       ${renderMetricCard('Trades', number(perf.trades))}
       ${renderMetricCard('Win rate', perf.win_rate == null ? '—' : `${perf.win_rate.toFixed(1)}%`)}
-      ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'warning')}
+      ${renderMetricCard('Net points', perf.net_points.toFixed(1), perf.net_points >= 0 ? 'positive' : 'negative')}
     </div>
   </div>`;
 }
@@ -2364,7 +2366,7 @@ function backtestBucketRows(buckets) {
       <td class="mono">${escapeHtml(b.label)}</td>
       <td class="mono">${number(b.trades)}</td>
       <td class="mono">${b.win_rate == null ? '—' : `${b.win_rate.toFixed(1)}%`}</td>
-      <td class="mono ${b.net_points >= 0 ? 'positive' : 'warning'}">${b.net_points.toFixed(1)}</td>
+      <td class="mono ${b.net_points >= 0 ? 'positive' : 'negative'}">${b.net_points.toFixed(1)}</td>
     </tr>`).join('');
 }
 

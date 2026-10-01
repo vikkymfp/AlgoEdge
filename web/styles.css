@@ -318,6 +318,7 @@ main { padding-top: 28px; padding-bottom: 48px; }
 .panel-heading h2 span { color: var(--text-faint); font: 600 12px var(--font-mono); }
 
 .positive { color: var(--success-text) !important; }
+.negative { color: var(--danger-text) !important; }
 .warning { color: var(--warning-text) !important; }
 
 /* ---------- market pulse ---------- */
@@ -352,6 +353,8 @@ main { padding-top: 28px; padding-bottom: 48px; }
 .market-chart polyline { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
 .market-chart .line-up { stroke: var(--success); }
 .market-chart .line-down { stroke: var(--danger); }
+.market-chart .area-up { fill: var(--success); opacity: .10; }
+.market-chart .area-down { fill: var(--danger); opacity: .10; }
 .market-status { display: grid; place-items: center; height: 48px; color: var(--text-faint); font: 600 10px var(--font-mono); letter-spacing: .06em; }
 
 .chart-panel {
