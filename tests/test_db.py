@@ -373,3 +373,26 @@ def test_sql_auth_settings_load_from_env(monkeypatch) -> None:
     assert settings.db_trusted_connection is False
     assert settings.db_user == "env_user"
     assert settings.db_password == "env_pw"
+
+
+def test_odbc_url_verifies_the_server_certificate_when_trust_is_off() -> None:
+    settings = Settings(db_server="localhost", db_trust_server_certificate=False)
+
+    odbc = _decoded_odbc(db_module._odbc_connection_url(settings, "AlgoEdge"))
+
+    assert "TrustServerCertificate=no;" in odbc
+
+
+def test_create_database_escapes_closing_brackets_in_the_name() -> None:
+    from unittest.mock import MagicMock, patch
+
+    settings = Settings(db_server="localhost", db_name="Algo]Edge")
+    engine = MagicMock()
+    connection = engine.connect.return_value.__enter__.return_value
+    connection.execute.return_value.fetchone.return_value = None
+
+    with patch.object(db_module, "create_engine", return_value=engine):
+        db_module._ensure_database_exists(settings)
+
+    statements = [str(call.args[0]) for call in connection.execute.call_args_list]
+    assert "CREATE DATABASE [Algo]]Edge]" in statements

@@ -46,7 +46,7 @@ def _odbc_connection_url(settings: Settings, database: str) -> str:
         f"DRIVER={{{settings.db_odbc_driver}}};"
         f"SERVER={settings.db_server};"
         f"DATABASE={database};"
-        "TrustServerCertificate=yes;"
+        f"TrustServerCertificate={'yes' if settings.db_trust_server_certificate else 'no'};"
     )
     if settings.db_trusted_connection:
         odbc_str += "Trusted_Connection=yes;"
@@ -68,7 +68,7 @@ def _ensure_database_exists(settings: Settings) -> None:
                 text("SELECT 1 FROM sys.databases WHERE name = :name"), {"name": settings.db_name}
             ).fetchone()
             if not exists:
-                connection.execute(text(f"CREATE DATABASE [{settings.db_name}]"))
+                connection.execute(text(f"CREATE DATABASE [{settings.db_name.replace(']', ']]')}]"))
                 logger.info("Created database %s", settings.db_name)
     finally:
         master_engine.dispose()

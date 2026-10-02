@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     db_user: str = ""
     db_password: str = ""
     db_odbc_driver: str = "ODBC Driver 18 for SQL Server"
+    # True accepts any server certificate (TrustServerCertificate=yes), which
+    # keeps self-signed local/VPS instances working but leaves the connection
+    # open to interception. Set false once the server presents a certificate
+    # the host trusts, especially for SQL authentication over a network.
+    db_trust_server_certificate: bool = True
 
     # Fernet key (base64, from Fernet.generate_key()) used to encrypt broker
     # credentials/tokens at rest in the database. Blank disables DB-backed

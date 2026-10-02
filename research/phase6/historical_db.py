@@ -115,6 +115,13 @@ class HistoricalCandleLoad(ResearchBase):
 RESEARCH_TABLES = (HistoricalCandleLoad.__table__, HistoricalCandle.__table__)
 
 
+def _odbc_value(value: str) -> str:
+    """Brace-quote like algoedge.db._odbc_value (kept in step by the convention test)."""
+    if any(char in value for char in ";{}=") or value != value.strip():
+        return "{" + value.replace("}", "}}") + "}"
+    return value
+
+
 def odbc_connection_url(settings: Settings, database: str | None = None) -> str:
     """Same convention as algoedge.db._odbc_connection_url (asserted equal in
     test_historical_db.py) - duplicated rather than imported so this module
@@ -123,10 +130,12 @@ def odbc_connection_url(settings: Settings, database: str | None = None) -> str:
         f"DRIVER={{{settings.db_odbc_driver}}};"
         f"SERVER={settings.db_server};"
         f"DATABASE={database or settings.db_name};"
-        "TrustServerCertificate=yes;"
+        f"TrustServerCertificate={'yes' if settings.db_trust_server_certificate else 'no'};"
     )
     if settings.db_trusted_connection:
         odbc_str += "Trusted_Connection=yes;"
+    else:
+        odbc_str += f"UID={_odbc_value(settings.db_user)};PWD={_odbc_value(settings.db_password)};"
     return f"mssql+pyodbc:///?odbc_connect={quote_plus(odbc_str)}"
 
 
