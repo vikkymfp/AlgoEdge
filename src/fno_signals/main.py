@@ -6,10 +6,9 @@ from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
-import yfinance as yf
 from growwapi.groww.exceptions import GrowwAPIException
 
-from algoedge import alerts, db
+from algoedge import alerts, db, groww_market_data
 from algoedge.config import get_settings
 from algoedge.liquidity_check import check_liquidity
 from algoedge.reconciliation import compute_expected_positions
@@ -76,7 +75,12 @@ class Ansi:
 
 
 def fetch_underlying_data(ticker: str, period: str = "5d", interval: str = "5m"):
-    history = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+    """Underlying/index candles for the strategy - the one data seam shared by
+    the scanner, Auto Trader, Backtest and option-context. The source is the
+    Groww historical-candle adapter (algoedge.groww_market_data); `ticker`,
+    `period` and `interval` keep their yfinance-style meaning (`^NSEI`, `5d` =
+    5 trading sessions, `5m`). Raises RuntimeError when no candles come back."""
+    history = groww_market_data.fetch_historical_candles(ticker, period=period, interval=interval)
     if history.empty:
         raise RuntimeError(f"No data returned for {ticker}")
     return history
@@ -426,8 +430,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--index", type=int, choices=sorted(INDEX_MAP),
         help="1=Nifty 50, 2=Bank Nifty, 3=Sensex. Omit for the interactive menu.",
     )
-    parser.add_argument("--period", default="5d", help="yfinance history period (default: 5d)")
-    parser.add_argument("--interval", default="5m", help="yfinance candle interval (default: 5m)")
+    parser.add_argument("--period", default="5d", help="history period; Nd = N trading sessions (default: 5d)")
+    parser.add_argument("--interval", default="5m", help="candle interval: 1m, 5m, 15m, 1h or 1d (default: 5m)")
     parser.add_argument(
         "--live", action="store_true",
         help=(
@@ -503,6 +507,10 @@ def main(argv: Sequence[str] | None = None) -> None:
             print(f"{Ansi.RED}Groww authentication failed: {error}{Ansi.RESET}")
             sys.exit(1)
         print(f"{Ansi.GREEN}Groww session verified.{Ansi.RESET}\n")
+        # Market data goes through the same TokenService as the orders below.
+        token_service = getattr(client, "token_service", None)
+        if token_service is not None:
+            groww_market_data.register_token_service(token_service)
 
         _restore_risk_state()
         # The --live flag plus the per-order interactive confirmation IS
