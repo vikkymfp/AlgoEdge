@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
 
-from algoedge import alerts, auth_routes, collector_reports, db, exit_reasons, groww_market_data
+from algoedge import alerts, auth_routes, collector_reports, db, exit_reasons
 from algoedge.auto_trader import (
     REASON_EXIT_WITHOUT_POSITION,
     REASON_MISSED_SQUARE_OFF_WAITING_PREFIX,
@@ -94,8 +94,6 @@ db.init_db(settings)
 # connection. TokenService.auto_refresh_if_needed() (called from its own
 # __init__) never raises - see token_service.py.
 token_service = TokenService(settings)
-# One shared Groww session for market data too (algoedge.groww_market_data).
-groww_market_data.register_token_service(token_service)
 broker = GrowwBroker(settings=settings, token_service=token_service)
 service = LiveGridService(broker, settings)
 risk_manager = RiskManager()
