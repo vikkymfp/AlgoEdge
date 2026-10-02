@@ -307,7 +307,10 @@ def test_web_server_registers_its_token_service():
         [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, cwd=root, check=False,
         env={"PATH": "/usr/bin:/bin", "PYTHONPATH": f"{root / 'src'}:{root}", "HOME": "/nonexistent"},
     )
-    assert result.stdout.strip() == "True", result.stderr[-500:]
+    # Importing web_server may print harmless banners first; the result is the last line.
+    lines = result.stdout.strip().splitlines()
+    assert result.returncode == 0, result.stderr[-500:]
+    assert lines and lines[-1] == "True", f"stdout={result.stdout[-300:]!r} stderr={result.stderr[-300:]!r}"
 
 
 # ======================================================================
