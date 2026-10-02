@@ -8,7 +8,8 @@ from datetime import date
 from pathlib import Path
 
 import pandas as pd
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from growwapi.groww.exceptions import GrowwAPIException
 from pydantic import BaseModel
@@ -61,6 +62,7 @@ from algoedge.option_contract import (
 from algoedge.order_manager import OrderManager
 from algoedge.pnl import compute_paper_unrealized_pnl, compute_realized_pnl
 from algoedge.reconciliation_gate import ReconciliationGate
+from algoedge.request_guard import parse_allowed_hosts, rejection_reason
 from algoedge.risk_manager import RiskManager, restore_risk_state
 from algoedge.scheduler import AutoTradingScheduler
 from algoedge.strategy_engine import DEFAULT_STRATEGY_CONFIG, StrategyConfig, evaluate
@@ -175,6 +177,21 @@ def _resolve_auto_trade_contract(index_id: str, event) -> OptionContract | None:
 
 
 app = FastAPI()
+_extra_allowed_hosts = parse_allowed_hosts(settings.allowed_hosts)
+
+
+@app.middleware("http")
+async def guard_against_cross_site_requests(request: Request, call_next):
+    reason = rejection_reason(
+        request.method,
+        request.headers.get("host"),
+        request.headers.get("origin"),
+        request.headers.get("x-algoedge-request"),
+        _extra_allowed_hosts,
+    )
+    if reason:
+        return JSONResponse({"detail": reason}, status_code=403)
+    return await call_next(request)
 
 
 @app.get("/api/grids")
@@ -828,7 +845,7 @@ def manual_trading_preview(
         product=product, price=price, trigger_price=trigger_price,
     )
     try:
-        validate_order_request(request)
+        validate_order_request(request, max_lots=settings.max_order_lots)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 

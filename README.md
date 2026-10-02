@@ -31,7 +31,7 @@ Start the dashboard server with:
 python -m algoedge.web_server
 ```
 
-Open `http://127.0.0.1:5173`. The server binds to localhost only and has no login of its own; anyone with local access to the machine can reach it. It keeps Groww credentials on the backend and exposes only normalized position and open-order data at `GET /api/grids`; credentials and raw account responses are never sent to the browser. Original grid levels are shown only when AlgoEdge has recorded them locally in its ignored order ledger.
+Open `http://127.0.0.1:5173`. The server binds to localhost only and has no login of its own; anyone with local access to the machine can reach it. Requests whose `Host` is not a loopback name (or listed in `ALGOEDGE_ALLOWED_HOSTS`) are refused, and every POST must come from the same origin and carry an `X-AlgoEdge-Request` header, so other websites open in your browser cannot drive the API. Manual orders are capped at `ALGOEDGE_MAX_ORDER_LOTS` lots. It keeps Groww credentials on the backend and exposes only normalized position and open-order data at `GET /api/grids`; credentials and raw account responses are never sent to the browser. Original grid levels are shown only when AlgoEdge has recorded them locally in its ignored order ledger.
 
 The Groww account used by the server must have access to the relevant live-data API. If Groww denies quote access, mark price, unrealized P&L, and liquidation price remain unavailable rather than falling back to paper values.
 

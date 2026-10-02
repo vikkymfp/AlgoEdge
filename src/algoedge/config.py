@@ -12,6 +12,12 @@ class Settings(BaseSettings):
     long_window: int = 50
     initial_cash: float = 100_000.0
     live_trading: bool = False
+    # Largest lot count a single manual order may request. A guard against a
+    # fat-fingered or forged request, not a risk limit.
+    max_order_lots: int = 10
+    # Extra Host header names (comma separated) the dashboard accepts besides
+    # localhost / 127.0.0.1 / [::1]; e.g. a hostname fronting it on the VPS.
+    allowed_hosts: str = ""
     broker: str = "paper"
     groww_access_token: str | None = None
     groww_api_key: str | None = None

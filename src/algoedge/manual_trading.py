@@ -79,7 +79,7 @@ class ManualOrderRequest:
     trigger_price: float | None = None
 
 
-def validate_order_request(request: ManualOrderRequest) -> None:
+def validate_order_request(request: ManualOrderRequest, max_lots: int | None = None) -> None:
     """Raises ValueError with a clear message for anything that would
     otherwise fail confusingly at the broker, or silently mean something
     other than what the user intended."""
@@ -93,6 +93,8 @@ def validate_order_request(request: ManualOrderRequest) -> None:
         raise ValueError(f"Unsupported product: {request.product}")
     if request.lots <= 0:
         raise ValueError("Lots must be a positive integer")
+    if max_lots is not None and request.lots > max_lots:
+        raise ValueError(f"Lots {request.lots} exceeds the per-order limit of {max_lots}")
     if request.order_type in ("LIMIT", "SL") and not request.price:
         raise ValueError(f"{request.order_type} orders require a price")
     if request.order_type in ("SL", "SL_M") and not request.trigger_price:

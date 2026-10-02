@@ -1,3 +1,15 @@
+// Every state-changing request carries this header; the server refuses POSTs
+// without it (see algoedge/request_guard.py), which keeps other web pages
+// from driving the dashboard API.
+const nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const method = (init.method || (input instanceof Request ? input.method : 'GET')).toUpperCase();
+  if (method === 'GET' || method === 'HEAD') return nativeFetch(input, init);
+  const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+  headers.set('X-AlgoEdge-Request', '1');
+  return nativeFetch(input, { ...init, headers });
+};
+
 const demoGrids = [
   {
     id: 'delta-01', name: 'Delta 01', symbol: 'RELIANCE', description: 'RELIANCE · NSE · Cash delivery', status: 'RUNNING', source: 'PAPER SNAPSHOT',
