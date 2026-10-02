@@ -4,6 +4,7 @@
 """
 
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime
@@ -16,6 +17,10 @@ from sqlalchemy.exc import IntegrityError
 from research.phase6 import historical_db as hdb
 
 REPO = Path(__file__).resolve().parents[2]
+
+# A stripped child environment still needs SYSTEMROOT on Windows (winsock/asyncio import fails without it).
+_WINDOWS_ENV = {k: os.environ[k] for k in ("SYSTEMROOT",) if k in os.environ}
+
 
 
 @pytest.fixture()
@@ -193,7 +198,7 @@ def test_importing_the_module_does_not_import_production_persistence() -> None:
         "print(sorted(m for m in ('algoedge.db', 'algoedge.models') if m in sys.modules))"
     )
     out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True,
-                         env={"PYTHONPATH": f"{REPO / 'src'}:{REPO}", "PATH": "/usr/bin:/bin"}, check=True)
+                         env={"PYTHONPATH": os.pathsep.join([str(REPO / "src"), str(REPO)]), "PATH": "/usr/bin:/bin", **_WINDOWS_ENV}, check=True)
     assert out.stdout.strip() == "[]"
 
 

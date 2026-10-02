@@ -3,6 +3,7 @@
     PYTHONPATH=src:. python -m pytest research/phase6/test_candle_source.py -q
 """
 
+import os
 import re
 import subprocess
 import sys
@@ -18,6 +19,10 @@ from research.phase6 import candle_source as cs
 from research.phase6 import historical_db as hdb
 
 REPO = Path(__file__).resolve().parents[2]
+
+# A stripped child environment still needs SYSTEMROOT on Windows (winsock/asyncio import fails without it).
+_WINDOWS_ENV = {k: os.environ[k] for k in ("SYSTEMROOT",) if k in os.environ}
+
 WRITE_SQL = re.compile(r"^\s*(INSERT|UPDATE|DELETE|MERGE|ALTER|CREATE|DROP|TRUNCATE|REPLACE|UPSERT|GRANT|"
                        r"REVOKE|EXEC|EXECUTE|ATTACH|DETACH|VACUUM|PRAGMA)\b", re.IGNORECASE)
 
@@ -233,7 +238,7 @@ def test_reader_does_not_import_production_persistence() -> None:
     code = ("import sys, research.phase6.candle_source\n"
             "print(sorted(m for m in ('algoedge.db', 'algoedge.models') if m in sys.modules))")
     out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True,
-                         env={"PYTHONPATH": f"{REPO / 'src'}:{REPO}", "PATH": "/usr/bin:/bin"})
+                         env={"PYTHONPATH": os.pathsep.join([str(REPO / "src"), str(REPO)]), "PATH": "/usr/bin:/bin", **_WINDOWS_ENV})
     assert out.stdout.strip() == "[]"  # S
 
 

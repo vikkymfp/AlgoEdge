@@ -426,11 +426,11 @@ def walk_forward(
         train_first, train_last = ordinals[train_start], ordinals[train_end - 1]
         test_first, test_last = ordinals[test_start], ordinals[test_end - 1]
 
-        def train_trades(name: str) -> list[BacktestTrade]:
+        def train_trades(name: str, first: int = train_first, last: int = train_last) -> list[BacktestTrade]:
             ix = index[name]
             if train_exit_cutoff:
-                return ix.entered_and_closed(train_first, train_last)
-            return ix.entered(train_first, train_last)
+                return ix.entered_and_closed(first, last)
+            return ix.entered(first, last)
 
         scores = {name: _score(summarize(train_trades(name)), min_train_trades) for name in trades_by_variant}
         best = max(scores, key=lambda k: (scores[k], k == baseline_name))

@@ -1201,7 +1201,8 @@ class Reconciler:
             evidence = [ref("paper_decision_events", decision)]
             index_id = decision.get("index_id")
 
-            def need(field_name: str, predicate, description: str) -> None:
+            def need(field_name: str, predicate, description: str, *, decision=decision, reason=reason,
+                     index_id=index_id, at=at, evidence=evidence) -> None:
                 value = decision.get(field_name)
                 if value is None:
                     self.add(check, "UNVERIFIABLE", "DECISION_FIELD_MISSING", f"{field_name} missing for {reason!r}",

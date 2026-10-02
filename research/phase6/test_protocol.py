@@ -7,6 +7,7 @@ small synthetic data; never the real 10-year dataset.
 
 import dataclasses
 import json
+import os
 import subprocess
 import sys
 from datetime import date, datetime, time, timedelta
@@ -24,6 +25,10 @@ from research.phase6.engine import walk_forward, window_bounds
 from research.phase6.run import synthetic_frame
 
 REPO = Path(__file__).resolve().parents[2]
+
+# A stripped child environment still needs SYSTEMROOT on Windows (winsock/asyncio import fails without it).
+_WINDOWS_ENV = {k: os.environ[k] for k in ("SYSTEMROOT",) if k in os.environ}
+
 IST = "Asia/Kolkata"
 SEGMENT2_RESEARCH_DAYS = 2083  # trading days of 2015-11-16 .. 2024-04-25 in the imported dataset
 SEGMENT1_DAYS = 109  # trading days of 2015-01-09 .. 2015-06-19
@@ -364,8 +369,8 @@ def test_grid_hash_is_stable_and_process_independent() -> None:
     code = "from research.phase6 import protocol; print(protocol.grid_hash(1))"
     for seed in ("0", "12345"):
         out = subprocess.run([sys.executable, "-c", code], cwd=REPO, capture_output=True, text=True, check=True,
-                             env={"PYTHONPATH": f"{REPO / 'src'}:{REPO}", "PYTHONHASHSEED": seed,
-                                  "PATH": "/usr/bin:/bin"})
+                             env={"PYTHONPATH": os.pathsep.join([str(REPO / "src"), str(REPO)]), "PYTHONHASHSEED": seed,
+                                  "PATH": "/usr/bin:/bin", **_WINDOWS_ENV})
         assert out.stdout.strip() == h
 
 
