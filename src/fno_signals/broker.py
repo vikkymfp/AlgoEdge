@@ -10,6 +10,7 @@ import pandas as pd
 from growwapi import GrowwAPI
 from growwapi.groww.exceptions import GrowwAPIException
 
+from algoedge import groww_market_data
 from algoedge.config import Settings, get_settings
 from algoedge.token_service import BrokerNotConnectedError, TokenService
 from fno_signals.config import IndexConfig
@@ -115,6 +116,9 @@ def generate_daily_session(settings: Settings | None = None) -> SessionBoundClie
         token_service.effective_client()
     except BrokerNotConnectedError as error:
         raise GrowwSessionError(str(error)) from error
+    # Candle fetches in this process reuse this session rather than building,
+    # and re-validating, a second one.
+    groww_market_data.use_token_service(token_service)
     return SessionBoundClient(token_service)
 
 

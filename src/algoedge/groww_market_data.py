@@ -13,9 +13,10 @@ names for quotes, chains and Greeks are matched against a few known spellings
 from __future__ import annotations
 
 import math
+import re
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -50,6 +51,12 @@ CANDLE_TIMEOUT_SECONDS = 30
 
 GREEK_FIELDS = ("delta", "gamma", "theta", "vega", "rho")
 
+_EXCHANGES = ("NSE", "BSE")
+_SYMBOL = re.compile(r"[A-Za-z0-9][A-Za-z0-9&_.-]{0,63}")
+# No Indian exchange candle predates this; an earlier parsed timestamp means a
+# number was read in the wrong unit (epoch 0 is 1970), so it is rejected.
+_EARLIEST_PLAUSIBLE = pd.Timestamp("1990-01-01", tz=_IST)
+
 _shared_lock = threading.Lock()
 _shared_service: TokenService | None = None
 
@@ -71,6 +78,36 @@ def _client(settings: Settings) -> Any:
             _shared_service = TokenService(settings)
         service = _shared_service
     return service.effective_client()
+
+
+def _exchange(value: str) -> str:
+    if value not in _EXCHANGES:
+        raise ValueError(f"Unsupported exchange {value!r}; expected one of {_EXCHANGES}")
+    return value
+
+
+def _symbol(value: str, what: str) -> str:
+    if not isinstance(value, str) or not _SYMBOL.fullmatch(value):
+        raise ValueError(f"Invalid {what}: {value!r}")
+    return value
+
+
+def _expiry(value: str) -> str:
+    """A YYYY-MM-DD expiry, validated as a real calendar date."""
+    try:
+        return date.fromisoformat(value).isoformat() if len(value) == 10 else _bad_expiry(value)
+    except (TypeError, ValueError):
+        return _bad_expiry(value)
+
+
+def _bad_expiry(value: object) -> str:
+    raise ValueError(f"Invalid expiry {value!r}; expected YYYY-MM-DD")
+
+
+def _as_ist(moment: datetime) -> datetime:
+    """Naive datetimes are IST wall-clock times (the engine's convention), not
+    the host's local time - astimezone() on a naive value would use the latter."""
+    return moment.replace(tzinfo=_IST) if moment.tzinfo is None else moment.astimezone(_IST)
 
 
 def _resolve_symbol(ticker: str) -> tuple[str, str, str]:
@@ -113,12 +150,13 @@ def _number(value: Any) -> float:
 
 
 def _first(mapping: Any, *keys: str) -> float:
-    """The first of `keys` present in `mapping` as a number (NaN if none)."""
+    """The first of `keys` holding a finite number in `mapping` (NaN if none)."""
     if not isinstance(mapping, dict):
         return math.nan
     for key in keys:
-        if key in mapping:
-            return _number(mapping[key])
+        number = _number(mapping.get(key))
+        if not math.isnan(number):
+            return number
     return math.nan
 
 
@@ -126,23 +164,34 @@ def parse_timestamps(values: pd.Series) -> pd.Series:
     """Candle timestamps as tz-aware IST.
 
     Strings without an offset are IST wall-clock times (the candle START).
-    Numbers are epoch instants (seconds, or milliseconds when >= 1e12) and so
-    absolute - pandas would otherwise read them as nanoseconds and silently
-    return 1970 dates."""
-    if pd.api.types.is_numeric_dtype(values):
-        numbers = pd.to_numeric(values, errors="raise").astype("float64")
-        milliseconds = numbers.abs() >= 1e12
-        seconds = numbers.where(~milliseconds, numbers / 1000.0)
-        return pd.to_datetime(seconds, unit="s", utc=True).dt.tz_convert(_IST)
-    parsed = pd.to_datetime(values, errors="raise")
-    if parsed.dt.tz is None:
-        return parsed.dt.tz_localize(_IST)
-    return parsed.dt.tz_convert(_IST)
+    Numbers (or all-digit strings) are epoch instants - seconds, or
+    milliseconds when >= 1e12 - and so absolute; pandas would otherwise read
+    them as nanoseconds and silently return 1970 dates. Mixed numbers and
+    text, missing values and implausibly early results are rejected."""
+    numbers = pd.to_numeric(values, errors="coerce")
+    if values.isna().any():
+        raise ValueError("candle timestamps contain missing values")
+    if numbers.notna().all():
+        numbers = numbers.astype("float64")
+        seconds = numbers.where(numbers.abs() < 1e12, numbers / 1000.0)
+        parsed = pd.to_datetime(seconds, unit="s", utc=True).dt.tz_convert(_IST)
+    elif numbers.notna().any():
+        raise ValueError("candle timestamps mix numeric epochs and text")
+    else:
+        parsed = pd.to_datetime(values, errors="raise")
+        parsed = parsed.dt.tz_localize(_IST) if parsed.dt.tz is None else parsed.dt.tz_convert(_IST)
+    if (parsed < _EARLIEST_PLAUSIBLE).any():
+        raise ValueError(f"implausible candle timestamp {parsed.min()} (wrong epoch unit?)")
+    return parsed
 
 
 def _candles_frame(candles: list[Any], label: str) -> pd.DataFrame:
+    if not isinstance(candles, list):
+        raise TypeError(f"Malformed Groww candle data for {label}")
     if not candles:
         raise RuntimeError(f"No Groww historical data returned for {label}")
+    if not all(isinstance(row, list | tuple) for row in candles) or len({len(row) for row in candles}) != 1:
+        raise RuntimeError(f"Malformed Groww candle rows for {label}")
     width = len(candles[0])
     if width == len(_COLUMNS):
         columns = _COLUMNS
@@ -175,16 +224,25 @@ def fetch_candles(
     """Candles for any instrument (index, option, ...) between two moments.
     The index is the candle START time, IST."""
     candle_interval, _minutes = _resolve_interval(interval)
+    if segment not in ("CASH", "FNO"):
+        raise ValueError(f"Unsupported segment {segment!r}")
+    exchange = _exchange(exchange)
+    groww_symbol = _symbol(groww_symbol, "Groww symbol")
+    start, end = _as_ist(start), _as_ist(end)
+    if start >= end:
+        raise ValueError(f"Candle window must start before it ends ({start} >= {end})")
     result = _client(settings).get_historical_candles(
         exchange=exchange,
         segment=segment,
         groww_symbol=groww_symbol,
-        start_time=start.astimezone(_IST).strftime("%Y-%m-%d %H:%M:%S"),
-        end_time=end.astimezone(_IST).strftime("%Y-%m-%d %H:%M:%S"),
+        start_time=start.strftime("%Y-%m-%d %H:%M:%S"),
+        end_time=end.strftime("%Y-%m-%d %H:%M:%S"),
         candle_interval=candle_interval,
         timeout=CANDLE_TIMEOUT_SECONDS,
     )
-    candles = result.get("candles", []) if isinstance(result, dict) else []
+    if not isinstance(result, dict):
+        raise TypeError(f"Unexpected Groww candle response for {groww_symbol}")
+    candles = result.get("candles", [])
     return _candles_frame(candles, f"{groww_symbol} ({segment}, {interval})")
 
 
@@ -224,6 +282,8 @@ def fetch_option_candles(
 
 
 def _exchange_symbols(tickers: list[str]) -> tuple[dict[str, str], tuple[str, ...]]:
+    if not tickers:
+        raise ValueError("At least one ticker is required")
     keys: dict[str, str] = {}
     for ticker in tickers:
         exchange, _candle, trading = _resolve_symbol(ticker)
@@ -233,7 +293,7 @@ def _exchange_symbols(tickers: list[str]) -> tuple[dict[str, str], tuple[str, ..
 
 def fetch_index_ltp(settings: Settings, tickers: list[str] | None = None) -> dict[str, float]:
     """Live last traded price per ticker (NaN when Groww returns none)."""
-    keys, symbols = _exchange_symbols(tickers or list(_TICKER_MAP))
+    keys, symbols = _exchange_symbols(list(_TICKER_MAP) if tickers is None else tickers)
     response = _client(settings).get_ltp(
         exchange_trading_symbols=symbols, segment="CASH", timeout=QUOTE_TIMEOUT_SECONDS,
     )
@@ -243,7 +303,7 @@ def fetch_index_ltp(settings: Settings, tickers: list[str] | None = None) -> dic
 
 def fetch_index_ohlc(settings: Settings, tickers: list[str] | None = None) -> dict[str, dict[str, float]]:
     """Current-session open/high/low/close per ticker."""
-    keys, symbols = _exchange_symbols(tickers or list(_TICKER_MAP))
+    keys, symbols = _exchange_symbols(list(_TICKER_MAP) if tickers is None else tickers)
     response = _client(settings).get_ohlc(
         exchange_trading_symbols=symbols, segment="CASH", timeout=QUOTE_TIMEOUT_SECONDS,
     )
@@ -263,11 +323,20 @@ def fetch_option_expiries(
     year: int | None = None, month: int | None = None,
 ) -> list[str]:
     """Expiry dates (YYYY-MM-DD, ascending) of an underlying's options."""
+    if year is not None and not 2000 <= year <= 5000:
+        raise ValueError(f"year must be 2000-5000, got {year}")
+    if month is not None and not 1 <= month <= 12:
+        raise ValueError(f"month must be 1-12, got {month}")
     response = _client(settings).get_expiries(
-        exchange=exchange, underlying_symbol=underlying, year=year, month=month,
+        exchange=_exchange(exchange), underlying_symbol=_symbol(underlying, "underlying"),
+        year=year, month=month,
         timeout=QUOTE_TIMEOUT_SECONDS,
     )
-    expiries = response.get("expiries", []) if isinstance(response, dict) else []
+    if not isinstance(response, dict):
+        raise TypeError(f"Unexpected Groww expiries response for {underlying}")
+    expiries = response.get("expiries", [])
+    if not isinstance(expiries, list):
+        raise TypeError(f"Malformed Groww expiries for {underlying}")
     return sorted(str(value) for value in expiries)
 
 
@@ -314,8 +383,9 @@ def fetch_option_chain(
 ) -> OptionChain:
     """The full chain for one expiry with per-strike LTP, volume, open
     interest, IV and Greeks. Strikes keyed by price, each with CE and/or PE."""
+    expiry = _expiry(expiry)
     response = _client(settings).get_option_chain(
-        exchange=exchange, underlying=underlying, expiry_date=expiry,
+        exchange=_exchange(exchange), underlying=_symbol(underlying, "underlying"), expiry_date=expiry,
         timeout=QUOTE_TIMEOUT_SECONDS,
     )
     if not isinstance(response, dict):
@@ -342,7 +412,7 @@ def fetch_option_quote(settings: Settings, trading_symbol: str, exchange: str = 
     """Live quote of one option contract (LTP, OHLC, volume, open interest,
     best bid/ask)."""
     response = _client(settings).get_quote(
-        trading_symbol=trading_symbol, exchange=exchange, segment="FNO",
+        trading_symbol=_symbol(trading_symbol, "trading symbol"), exchange=_exchange(exchange), segment="FNO",
         timeout=QUOTE_TIMEOUT_SECONDS,
     )
     if not isinstance(response, dict):
@@ -360,7 +430,8 @@ def fetch_option_greeks(
     growwapi's `get_greeks` takes no timeout argument, so unlike every other
     call here this one is not bounded by QUOTE_TIMEOUT_SECONDS."""
     response = _client(settings).get_greeks(
-        exchange=exchange, underlying=underlying, trading_symbol=trading_symbol, expiry=expiry,
+        exchange=_exchange(exchange), underlying=_symbol(underlying, "underlying"),
+        trading_symbol=_symbol(trading_symbol, "trading symbol"), expiry=_expiry(expiry),
     )
     if not isinstance(response, dict):
         raise TypeError(f"Unexpected Groww Greeks response for {trading_symbol}")

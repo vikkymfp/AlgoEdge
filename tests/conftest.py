@@ -114,3 +114,15 @@ def make_user(auth_env):
         return user
 
     return make
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_market_data_service():
+    """groww_market_data keeps one process-wide TokenService. Tests that build
+    a real session (generate_daily_session) or fetch candles register one, so
+    put back whatever was there before each test to stop it leaking."""
+    from algoedge import groww_market_data
+
+    previous = groww_market_data._shared_service
+    yield
+    groww_market_data.use_token_service(previous)
