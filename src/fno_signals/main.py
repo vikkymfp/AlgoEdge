@@ -6,11 +6,11 @@ from collections.abc import Sequence
 from datetime import timedelta
 from typing import Any
 
-import yfinance as yf
 from growwapi.groww.exceptions import GrowwAPIException
 
 from algoedge import alerts, db
 from algoedge.config import get_settings
+from algoedge.groww_market_data import fetch_historical_candles
 from algoedge.liquidity_check import check_liquidity
 from algoedge.reconciliation import compute_expected_positions
 from algoedge.reconciliation_gate import ReconciliationGate
@@ -76,7 +76,7 @@ class Ansi:
 
 
 def fetch_underlying_data(ticker: str, period: str = "5d", interval: str = "5m"):
-    history = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+    history = fetch_historical_candles(get_settings(), ticker, period=period, interval=interval)
     if history.empty:
         raise RuntimeError(f"No data returned for {ticker}")
     return history
@@ -426,8 +426,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         "--index", type=int, choices=sorted(INDEX_MAP),
         help="1=Nifty 50, 2=Bank Nifty, 3=Sensex. Omit for the interactive menu.",
     )
-    parser.add_argument("--period", default="5d", help="yfinance history period (default: 5d)")
-    parser.add_argument("--interval", default="5m", help="yfinance candle interval (default: 5m)")
+    parser.add_argument("--period", default="5d", help="history period (default: 5d)")
+    parser.add_argument("--interval", default="5m", help="candle interval (default: 5m)")
     parser.add_argument(
         "--live", action="store_true",
         help=(
