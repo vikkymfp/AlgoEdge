@@ -251,3 +251,37 @@ def test_paper_unrealized_pnl_computes_loss_for_a_long_position() -> None:
     account = SimulatedAccount(quantity=10, average_price=100.0)
 
     assert compute_paper_unrealized_pnl(account, current_price=90.0) == pytest.approx(-100.0)
+
+
+def test_paper_unrealized_pnl_computes_gain_for_a_call_position() -> None:
+    account = SimulatedAccount(quantity=10, average_price=100.0, side="CALL")
+
+    assert compute_paper_unrealized_pnl(account, current_price=120.0) == pytest.approx(200.0)
+
+
+def test_paper_unrealized_pnl_computes_gain_for_a_put_when_price_falls() -> None:
+    account = SimulatedAccount(quantity=10, average_price=100.0, side="PUT")
+
+    assert compute_paper_unrealized_pnl(account, current_price=90.0) == pytest.approx(100.0)
+
+
+def test_paper_unrealized_pnl_computes_loss_for_a_put_when_price_rises() -> None:
+    account = SimulatedAccount(quantity=10, average_price=100.0, side="PUT")
+
+    assert compute_paper_unrealized_pnl(account, current_price=120.0) == pytest.approx(-200.0)
+
+
+@pytest.mark.parametrize(("entry_kind", "exit_price"), [
+    ("ENTRY_CALL", 24_950.0), ("ENTRY_CALL", 25_080.0),
+    ("ENTRY_PUT", 24_950.0), ("ENTRY_PUT", 25_080.0),
+])
+def test_paper_unrealized_pnl_matches_the_realized_pnl_of_closing_at_that_price(
+    entry_kind: str, exit_price: float,
+) -> None:
+    account = SimulatedAccount()
+    account.fill_event(entry_kind, price=25_000.0, quantity=2, index_id="nifty-50")
+
+    unrealized = compute_paper_unrealized_pnl(account, current_price=exit_price)
+    realized = account.fill_event("EXIT_TARGET", price=exit_price, quantity=2)
+
+    assert unrealized == pytest.approx(realized)

@@ -160,12 +160,15 @@ def compute_realized_pnl(
 
 
 def compute_paper_unrealized_pnl(account: Any, current_price: float | None) -> float | None:
-    """Auto Trading's paper account holds a single simulated long position
-    at index-spot-price levels (not option premiums), so unrealized P&L can
-    be computed directly against the current index price from yfinance.
+    """Auto Trading's paper account holds a single simulated CALL or PUT
+    position at index-spot-price levels (not option premiums), so unrealized
+    P&L can be computed directly against the current index price. Uses the
+    same direction rule as SimulatedAccount.fill_event(): a PUT gains when the
+    price falls. A position with no side (the legacy BUY/SELL path) is long.
     Returns None if there's no open position or no current price available -
     never a guessed/zero value standing in for genuinely unknown data.
     """
     if account.quantity == 0 or account.average_price is None or current_price is None:
         return None
-    return (current_price - account.average_price) * account.quantity
+    direction = -1 if getattr(account, "side", None) == "PUT" else 1
+    return (current_price - account.average_price) * account.quantity * direction
